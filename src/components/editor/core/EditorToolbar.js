@@ -1,8 +1,8 @@
 // EditorToolbar.js - Enhanced with Phase 3 advanced features
 import { Button } from '../../common/Button.js';
-import EditorSessionStorage from '../../../engine/EditorSessionStorage';
+import EditorSessionStorage from '../../../engine/EditorSessionStorage.js';
 
-const { useState, useEffect, useRef } = React;
+import React, { useState, useEffect, useRef } from "https://esm.sh/react@18";
 
 export default function EditorToolbar({
   adventureTitle = 'Untitled Adventure',

@@ -1,7 +1,7 @@
 // StatsPanel.js - Enhanced with Phase 3 advanced features
 import { InventoryDisplay } from './InventoryDisplay.js';
 
-const { useState, createElement } = React;
+import React, { useState, createElement } from "https://esm.sh/react@18";
 
 export function StatsPanel({ 
   stats, 

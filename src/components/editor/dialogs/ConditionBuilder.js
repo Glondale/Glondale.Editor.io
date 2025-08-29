@@ -3,7 +3,7 @@
 
 import { Button } from '../../common/Button.js';
 
-const { useState, useEffect } = React;
+import React, { useState, useEffect } from "https://esm.sh/react@18";
 
 export default function ConditionBuilder({
   conditions = [],

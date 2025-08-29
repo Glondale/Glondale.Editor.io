@@ -2,7 +2,7 @@
 // Handles: SVG line rendering, curved paths, connection labels, hover states
 // FIXED: Now properly handles viewport transforms for canvas panning
 
-const { useState } = React;
+import React, { useState } from "https://esm.sh/react@18";
 
 export default function ConnectionLine({
   connection,

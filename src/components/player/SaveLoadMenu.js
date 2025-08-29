@@ -1,7 +1,7 @@
 // SaveLoadMenu.js - Enhanced with Phase 3 advanced features
 import { Button } from '../common/Button.js';
 
-const { useState, createElement, useRef } = React;
+import React, { useState, createElement, useRef } from "https://esm.sh/react@18";
 
 export function SaveLoadMenu({
   saves,

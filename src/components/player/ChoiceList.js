@@ -1,7 +1,7 @@
 // ChoiceList.js - Enhanced with Phase 3 advanced choice features
 import { Button } from '../common/Button.js';
 
-const { createElement, useState, useEffect } = React;
+import React, { createElement, useState, useEffect } from "https://esm.sh/react@18";
 
 export function ChoiceList({ 
   choices, 

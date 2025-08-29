@@ -1,7 +1,7 @@
 // SceneNode.js - Individual draggable scene nodes
 // Handles: scene representation, drag behavior, selection, connection points, context menus
 
-const { useState, useRef, useCallback } = React;
+import React, { useState, useRef, useCallback } from "https://esm.sh/react@18";
 
 export default function SceneNode({
   nodeId,

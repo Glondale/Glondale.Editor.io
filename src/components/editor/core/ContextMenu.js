@@ -1,7 +1,7 @@
 // ContextMenu.js - Efficient context menu component
 // Handles: Position-aware rendering, click-outside-to-close, keyboard navigation
 
-const { useEffect, useRef } = React;
+import React, { useEffect, useRef } from "https://esm.sh/react@18";
 
 export default function ContextMenu({
   isOpen = false,

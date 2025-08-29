@@ -6,7 +6,7 @@ import { StatsPanel } from './StatsPanel.js';
 import { SaveLoadMenu } from './SaveLoadMenu.js';
 import { Button } from '../common/Button.js';
 
-const { useState, createElement } = React;
+import React, { useState, createElement } from "https://esm.sh/react@18";
 
 export function GameScreen() {
   const {

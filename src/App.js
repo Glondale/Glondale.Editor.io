@@ -3,7 +3,7 @@ import { GameScreen } from './components/player/GameScreen.js';
 import EditorScreen from './components/editor/EditorScreen.js';
 import { useGameState } from './hooks/useGameState.js';
 
-const { useEffect, createElement, useState } = React;
+import React, { useEffect, createElement, useState } from "https://esm.sh/react@18";
 
 // Enhanced Phase 3 sample adventure showcasing all advanced features
 const enhancedSampleAdventure = {

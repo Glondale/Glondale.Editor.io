@@ -6,10 +6,10 @@ import ContextMenu from './core/ContextMenu.js';
 import SceneEditDialog from './dialogs/SceneEditDialog.js';
 import ChoiceEditDialog from './dialogs/ChoiceEditDialog.js';
 import InventoryEditor from './InventoryEditor.js';
-import EditorSessionStorage from '../../../engine/EditorSessionStorage.js';
-import AdvancedChoiceDialog from './dialogs/AdvancedChoiceDialog.js';
+import EditorSessionStorage from '../../engine/EditorSessionStorage.js';
+import AdvancedChoiceDialog from './AdvancedChoiceDialog.js';
 
-const { useState, useEffect, useCallback, useRef } = React;
+import React, { useState, useEffect, useCallback, useRef } from "https://esm.sh/react@18";
 
 export default function EditorScreen({
   onExitEditor = () => {},

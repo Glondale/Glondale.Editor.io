@@ -2,7 +2,7 @@
 import { Button } from '../components/common/Button.js';
 import { ConditionBuilder } from '../components/editor/dialogs/ConditionBuilder.js';
 import { AdvancedChoiceDialog } from '../components/editor/AdvancedChoiceDialog.js';
-const { useState, useEffect, useRef } = React;
+import React, { useState, useEffect, useRef } from "https://esm.sh/react@18";
 
 export default function SceneEditDialog({
   isOpen = false,

@@ -1,5 +1,5 @@
  
-const { createElement } = React;
+import React, { createElement } from "https://esm.sh/react@18";
 
 export function Button({
   children,

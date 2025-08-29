@@ -3,7 +3,7 @@
 
 import { Button } from '../../common/Button.js';
 
-const { useState, useEffect, useRef } = React;
+import React, { useState, useEffect, useRef } from "https://esm.sh/react@18";
 
 export default function ChoiceEditDialog({
   isOpen = false,

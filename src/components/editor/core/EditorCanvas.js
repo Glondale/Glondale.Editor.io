@@ -3,7 +3,7 @@
 
 import ConnectionLine from '../nodes/ConnectionLine.js';
 
-const { useState, useEffect, useRef, useCallback } = React;
+import React, { useState, useEffect, useRef, useCallback } from "https://esm.sh/react@18";
 
 export default function EditorCanvas({ 
   nodes = new Map(), 

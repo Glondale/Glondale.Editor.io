@@ -5,7 +5,7 @@ import { SaveSystem } from '../engine/SaveSystem.js';
 import { CrossGameSaveSystem } from '../engine/CrossGameSaveSystem.js';
 import { ExportableDataManager } from '../engine/ExportableDataManager.js';
 
-const { createContext, useContext, useReducer, useEffect } = React;
+import React, { createContext, useContext, useReducer, useEffect } from "https://esm.sh/react@18";
 
 // Enhanced game state reducer with Phase 3 features
 function gameReducer(state, action) {

@@ -3,7 +3,7 @@
 
 import { Button } from '../../common/Button.js';
 
-const { useState } = React;
+import React, { useState } from "https://esm.sh/react@18";
 
 export default function EditorSidebar({
   selectedNode = null,
