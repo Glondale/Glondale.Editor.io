@@ -2,6 +2,7 @@ import { GameProvider } from './contexts/GameContext.js';
 import { GameScreen } from './components/player/GameScreen.js';
 import EditorScreen from './components/editor/EditorScreen.js';
 import { useGameState } from './hooks/useGameState.js';
+import ErrorBoundary from './components/common/ErrorBoundary.js';
 
 import React, { useEffect, createElement, useState } from "https://esm.sh/react@18";
 
@@ -655,22 +656,24 @@ function AppContent() {
 
   // Initialize with enhanced sample adventure on first load
   useEffect(() => {
-    if (!isGameLoaded && mode === 'player' && !testAdventure) {
-      console.log('App: Loading Phase 3 enhanced sample adventure');
-      loadAdventure(enhancedSampleAdventure);
-    }
+  // Start with blank environment by default. Uncomment below to load demo adventure on first run.
+  // if (!isGameLoaded && mode === 'player' && !testAdventure) {
+  //   console.log('App: Loading Phase 3 enhanced sample adventure');
+  //   loadAdventure(enhancedSampleAdventure);
+  // }
   }, [isGameLoaded, loadAdventure, mode, testAdventure]);
 
   // Load test adventure from editor
   useEffect(() => {
     if (testAdventure && mode === 'player') {
-      console.log('App: Loading test adventure from editor:', testAdventure.title);
+      console.log('App: playtest effect running - testAdventure present:', !!testAdventure, 'mode:', mode, 'title:', testAdventure?.title);
       resetGame();
       setTimeout(() => {
+        console.log('App: calling loadAdventure with testAdventure:', testAdventure?.title, testAdventure);
         loadAdventure(testAdventure);
       }, 10);
     }
-  }, [testAdventure, mode, loadAdventure, resetGame]);
+  }, [testAdventure, mode]);
 
   // Handle play testing from editor
   const handlePlayTest = (adventure) => {
@@ -874,8 +877,18 @@ function AppContent() {
 
 // Wrap the app content with necessary providers
 function App() {
-  return createElement(GameProvider, null,
-    createElement(AppContent)
+  return createElement(ErrorBoundary, {
+    title: 'Adventure Game Error',
+    message: 'The adventure game encountered an unexpected error. Your progress should be preserved.',
+    onError: (error, errorInfo) => {
+      // Additional error handling can be added here
+      console.error('App-level error caught:', error, errorInfo);
+    },
+    logProps: false // Don't log props for privacy
+  }, 
+    createElement(GameProvider, null,
+      createElement(AppContent)
+    )
   );
 }
 

@@ -8,8 +8,25 @@ import ChoiceEditDialog from './dialogs/ChoiceEditDialog.js';
 import InventoryEditor from './InventoryEditor.js';
 import EditorSessionStorage from '../../engine/EditorSessionStorage.js';
 import AdvancedChoiceDialog from './AdvancedChoiceDialog.js';
+import ActionHistoryDialog from './dialogs/ActionHistoryDialog.js';
+import SearchPanel from './panels/SearchPanel.js';
+import { commandHistory } from '../../services/CommandHistory.js';
+import {
+  CreateNodeCommand,
+  DeleteNodeCommand,
+  MoveNodeCommand,
+  UpdateNodeCommand,
+  CreateChoiceCommand,
+  DeleteChoiceCommand,
+  UpdateChoiceCommand,
+  UpdateStatsCommand,
+  CreateConnectionCommand,
+  BulkOperationCommand,
+  ImportAdventureCommand
+} from '../../commands/EditorCommands.js';
 
-import React, { useState, useEffect, useCallback, useRef } from "https://esm.sh/react@18";
+import React, { useState, useEffect, useCallback, useRef, useMemo } from "https://esm.sh/react@18";
+import { validationService } from '../../services/ValidationService.js';
 
 export default function EditorScreen({
   onExitEditor = () => {},
@@ -24,6 +41,18 @@ export default function EditorScreen({
   const [lastSaved, setLastSaved] = useState(null);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const autoSaveIntervalRef = useRef(null);
+  
+  // Command system state
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
+  const [undoDescription, setUndoDescription] = useState(null);
+  const [redoDescription, setRedoDescription] = useState(null);
+  const [commandHistoryVisible, setCommandHistoryVisible] = useState(false);
+  const commandCallbacks = useRef(null);
+  
+  // Search panel state
+  const [searchPanelVisible, setSearchPanelVisible] = useState(false);
+  const [searchHighlights, setSearchHighlights] = useState([]);
 
   // Enhanced adventure state with Phase 3 features
   const [adventure, setAdventure] = useState({
@@ -61,6 +90,9 @@ export default function EditorScreen({
   const [validationErrors, setValidationErrors] = useState([]);
   const [validationWarnings, setValidationWarnings] = useState([]);
 
+  // Debounce ref for auto validation
+  const validationDebounceRef = useRef(null);
+
   // Enhanced dialog state with Phase 3 dialogs
   const [activeDialog, setActiveDialog] = useState(null);
   const [dialogData, setDialogData] = useState(null);
@@ -79,6 +111,37 @@ export default function EditorScreen({
   // Canvas viewport
   const [canvasViewport, setCanvasViewport] = useState({ x: 0, y: 0, zoom: 1 });
 
+  // Initialize command system
+  useEffect(() => {
+    // Set up command callbacks
+    commandCallbacks.current = {
+      onNodeCreate: handleNodeCreateCommand,
+      onNodeDelete: handleNodeDeleteCommand,
+      onNodeMove: handleNodeMoveCommand,
+      onNodeUpdate: handleNodeUpdateCommand,
+      onChoiceAdd: handleChoiceAddCommand,
+      onChoiceDelete: handleChoiceDeleteCommand,
+      onChoiceUpdate: handleChoiceUpdateCommand,
+      onStatAdd: handleStatAddCommand,
+      onStatUpdate: handleStatUpdateCommand,
+      onStatDelete: handleStatDeleteCommand,
+      onConnectionCreate: handleConnectionCreateCommand,
+      onConnectionDelete: handleConnectionDeleteCommand,
+      onAdventureImport: handleAdventureImportCommand,
+      onAdventureClear: handleAdventureClearCommand
+    };
+    
+    // Listen to command history changes
+    const unsubscribe = commandHistory.addListener(handleCommandHistoryChange);
+    
+    // Update initial state
+    updateCommandState();
+    
+    return () => {
+      unsubscribe();
+    };
+  }, []);
+  
   // Load project list on mount
   useEffect(() => {
     loadProjectList();
@@ -88,11 +151,15 @@ export default function EditorScreen({
     if (lastSession) {
       setCurrentProject(lastSession.project);
       if (lastSession.adventureData) {
-        handleImport(lastSession.adventureData);
+        executeCommand(new ImportAdventureCommand(
+          lastSession.adventureData, 
+          generateAdventureData(),
+          commandCallbacks.current
+        ));
       }
     } else {
-      // Initialize with sample adventure if no session
-      initializeSampleAdventure();
+  // Start blank by default (no sample adventure)
+  // initializeSampleAdventure();
     }
   }, []);
 
@@ -125,6 +192,12 @@ export default function EditorScreen({
     try {
       const projects = await editorSession.listProjects();
       setProjectList(projects);
+      
+      // Also check if there's a current project and load it
+      const currentProj = await editorSession.getCurrentProject();
+      if (currentProj && !currentProject) {
+        setCurrentProject(currentProj);
+      }
     } catch (error) {
       console.error('Failed to load project list:', error);
     }
@@ -149,15 +222,16 @@ export default function EditorScreen({
     }
   };
 
-  const generateAdventureData = () => {
+  const generateAdventureData = useCallback(() => {
     return {
       ...adventure,
+      startSceneId: Array.from(nodes.values()).find(n => n.isStartScene)?.id || Array.from(nodes.keys())[0] || null,
       scenes: Array.from(nodes.values()).map(node => {
         const { isStartScene, ...sceneData } = node;
         return sceneData;
       })
     };
-  };
+  }, [adventure, nodes]);
 
   // Enhanced sample adventure with Phase 3 features
   const createEnhancedSampleAdventure = () => {
@@ -524,49 +598,203 @@ export default function EditorScreen({
   }, [contextMenu.nodeId, nodes]);
 
   // Enhanced node operations
-  const handleNodeCreate = useCallback((position) => {
-    const nodeId = `scene_${Date.now()}`;
-    const newNode = {
-      id: nodeId,
-      title: 'New Scene',
-      content: '',
-      choices: [],
-      position: position,
-      isStartScene: false,
-      onEnter: [],
-      onExit: [],
-      tags: [],
-      category: 'general',
-      requiredItems: []
-    };
+  // Command system integration
+  const executeCommand = useCallback(async (command) => {
+    try {
+      await commandHistory.executeCommand(command);
+      setHasUnsavedChanges(true);
+    } catch (error) {
+      console.error('Command execution failed:', error);
+      alert(`Operation failed: ${error.message}`);
+    }
+  }, []);
+  
+  const handleUndo = useCallback(async () => {
+    try {
+      await commandHistory.undo();
+    } catch (error) {
+      console.error('Undo failed:', error);
+      alert(`Undo failed: ${error.message}`);
+    }
+  }, []);
+  
+  const handleRedo = useCallback(async () => {
+    try {
+      await commandHistory.redo();
+    } catch (error) {
+      console.error('Redo failed:', error);
+      alert(`Redo failed: ${error.message}`);
+    }
+  }, []);
+  
+  const handleCommandHistoryChange = useCallback((event) => {
+    updateCommandState();
     
-    setNodes(prev => new Map(prev.set(nodeId, newNode)));
-    setSelectedNodeId(nodeId);
+    // Handle different command events
+    switch (event.type) {
+      case 'execute':
+      case 'undo':
+      case 'redo':
+        // Force re-render of components that depend on state
+        break;
+      case 'clear':
+        // Handle history clear
+        break;
+    }
+  }, []);
+  
+  const updateCommandState = useCallback(() => {
+    setCanUndo(commandHistory.canUndo());
+    setCanRedo(commandHistory.canRedo());
+    setUndoDescription(commandHistory.getUndoDescription());
+    setRedoDescription(commandHistory.getRedoDescription());
   }, []);
 
-  const handleNodeUpdate = useCallback((nodeId, updates) => {
-    setNodes(prev => {
-      const newNodes = new Map(prev);
-      const node = newNodes.get(nodeId);
-      if (node) {
-        newNodes.set(nodeId, { ...node, ...updates });
+  // Advanced connection system refs and node versioning (move earlier to avoid TDZ)
+  const connectionCacheEarly = useRef(new Map());
+  const nodeVersionsEarly = useRef(new Map());
+  const lastNodeChangeTimestampEarly = useRef(new Map());
+
+  const updateNodeVersion = useCallback((nodeId) => {
+    const currentVersion = nodeVersionsEarly.current.get(nodeId) || 0;
+    nodeVersionsEarly.current.set(nodeId, currentVersion + 1);
+    lastNodeChangeTimestampEarly.current.set(nodeId, Date.now());
+  }, []);
+  
+  // Advanced connection system with caching and selective updates
+  const updateConnectionsSelectively = useCallback((changedNodeIds = null) => {
+    if (!changedNodeIds) {
+      // Full update - clear cache
+      connectionCacheEarly.current.clear();
+    }
+
+    const newConnections = new Map(connections);
+    const nodesToUpdate = changedNodeIds || Array.from(nodes.keys());
+    let hasChanges = false;
+
+    // Performance optimization: batch process changes
+    const changesBatch = {
+      toRemove: new Set(),
+      toAdd: new Map(),
+      toUpdate: new Map()
+    };
+
+    nodesToUpdate.forEach(nodeId => {
+      const node = nodes.get(nodeId);
+      const nodeVersion = nodeVersionsEarly.current.get(nodeId) || 0;
+      const cachedVersion = connectionCacheEarly.current.get(`${nodeId}_version`);
+
+      // Skip if node hasn't changed and we have cached connections
+      if (cachedVersion === nodeVersion && node && connectionCacheEarly.current.has(`${nodeId}_connections`)) {
+        return;
       }
-      return newNodes;
+
+      if (!node) {
+        // Handle node deletion
+        const connectionsToRemove = Array.from(newConnections.keys())
+          .filter(connId => {
+            const conn = newConnections.get(connId);
+            return conn?.fromNodeId === nodeId || conn?.toNodeId === nodeId;
+          });
+
+        connectionsToRemove.forEach(connId => changesBatch.toRemove.add(connId));
+        connectionCacheEarly.current.delete(`${nodeId}_version`);
+        connectionCacheEarly.current.delete(`${nodeId}_connections`);
+        hasChanges = true;
+        return;
+      }
+      
+      // Remove existing connections from this node
+      const existingConnections = Array.from(newConnections.keys())
+        .filter(connId => connId.startsWith(`${nodeId}_`));
+      
+      existingConnections.forEach(connId => changesBatch.toRemove.add(connId));
+      
+      // Generate new connections for this node
+      const nodeConnections = new Map();
+      if (node.choices) {
+        node.choices.forEach((choice) => {
+          if (choice.targetSceneId && nodes.has(choice.targetSceneId)) {
+            const connectionId = `${nodeId}_${choice.id}_${choice.targetSceneId}`;
+            const newConnection = {
+              id: connectionId,
+              fromNodeId: nodeId,
+              toNodeId: choice.targetSceneId,
+              choiceId: choice.id,
+              choice: choice
+            };
+            
+            nodeConnections.set(connectionId, newConnection);
+            changesBatch.toAdd.set(connectionId, newConnection);
+          }
+        });
+      }
+      
+      // Cache the connections for this node
+      connectionCacheEarly.current.set(`${nodeId}_version`, nodeVersion);
+      connectionCacheEarly.current.set(`${nodeId}_connections`, nodeConnections);
+      hasChanges = true;
     });
     
-    if (updates.choices) {
-      generateConnections();
+    // Apply batched changes
+    if (hasChanges) {
+      // Remove connections
+      changesBatch.toRemove.forEach(connId => newConnections.delete(connId));
+      
+      // Add new connections
+      changesBatch.toAdd.forEach((connection, connId) => {
+        newConnections.set(connId, connection);
+      });
+      
+      setConnections(newConnections);
     }
-    setHasUnsavedChanges(true);
-  }, []);
+  }, [nodes, connections]);
 
-  const handleNodeDelete = useCallback((nodeId) => {
-    const node = nodes.get(nodeId);
-    if (node?.isStartScene) {
-      alert('Cannot delete the start scene. Set another scene as start first.');
+  // Full connection regeneration with optional nodeId parameter for selective updates
+  const generateConnections = useCallback((nodeId = null) => {
+    if (nodeId) {
+      // Selective update for single node
+      updateConnectionsSelectively([nodeId]);
       return;
     }
-
+    
+    // Full regeneration - clear all caches
+    connectionCacheEarly.current.clear();
+    nodeVersionsEarly.current.clear();
+    lastNodeChangeTimestampEarly.current.clear();
+    
+    const newConnections = new Map();
+    
+    nodes.forEach((node) => {
+      if (node.choices) {
+        node.choices.forEach((choice) => {
+          if (choice.targetSceneId && nodes.has(choice.targetSceneId)) {
+            const connectionId = `${node.id}_${choice.id}_${choice.targetSceneId}`;
+            newConnections.set(connectionId, {
+              id: connectionId,
+              fromNodeId: node.id,
+              toNodeId: choice.targetSceneId,
+              choiceId: choice.id,
+              choice: choice
+            });
+          }
+        });
+      }
+      
+      // Initialize version tracking
+      updateNodeVersion(node.id);
+    });
+    
+    setConnections(newConnections);
+  }, [nodes, updateConnectionsSelectively]);
+  
+  // Command callback implementations
+  const handleNodeCreateCommand = useCallback(async (nodeId, nodeData) => {
+    setNodes(prev => new Map(prev.set(nodeId, nodeData)));
+    setSelectedNodeId(nodeId);
+  }, []);
+  
+  const handleNodeDeleteCommand = useCallback(async (nodeId) => {
     setNodes(prev => {
       const newNodes = new Map(prev);
       newNodes.delete(nodeId);
@@ -586,8 +814,238 @@ export default function EditorScreen({
     if (selectedNodeId === nodeId) {
       setSelectedNodeId(null);
     }
-    setHasUnsavedChanges(true);
-  }, [selectedNodeId, nodes]);
+  }, [selectedNodeId]);
+  
+  const handleNodeMoveCommand = useCallback(async (nodeId, position) => {
+    setNodes(prev => {
+      const newNodes = new Map(prev);
+      const node = newNodes.get(nodeId);
+      if (node) {
+        newNodes.set(nodeId, { ...node, position });
+      }
+      return newNodes;
+    });
+    
+    updateNodeVersion(nodeId);
+    generateConnections(nodeId);
+  }, [updateNodeVersion, generateConnections]);
+  
+  const handleNodeUpdateCommand = useCallback(async (nodeId, updates) => {
+    setNodes(prev => {
+      const newNodes = new Map(prev);
+      const node = newNodes.get(nodeId);
+      if (node) {
+        newNodes.set(nodeId, { ...node, ...updates });
+      }
+      return newNodes;
+    });
+    
+    updateNodeVersion(nodeId);
+    if (updates.choices) {
+      generateConnections(nodeId);
+    }
+  }, [updateNodeVersion, generateConnections]);
+  
+  const handleChoiceAddCommand = useCallback(async (nodeId, choiceData) => {
+    setNodes(prev => {
+      const newNodes = new Map(prev);
+      const node = newNodes.get(nodeId);
+      if (node) {
+        const updatedChoices = [...(node.choices || []), choiceData];
+        newNodes.set(nodeId, { ...node, choices: updatedChoices });
+      }
+      return newNodes;
+    });
+    
+    updateNodeVersion(nodeId);
+    generateConnections(nodeId);
+  }, [updateNodeVersion, generateConnections]);
+  
+  const handleChoiceDeleteCommand = useCallback(async (nodeId, choiceId) => {
+    setNodes(prev => {
+      const newNodes = new Map(prev);
+      const node = newNodes.get(nodeId);
+      if (node) {
+        const updatedChoices = node.choices.filter(c => c.id !== choiceId);
+        newNodes.set(nodeId, { ...node, choices: updatedChoices });
+      }
+      return newNodes;
+    });
+    
+    updateNodeVersion(nodeId);
+    generateConnections(nodeId);
+  }, [updateNodeVersion, generateConnections]);
+  
+  const handleChoiceUpdateCommand = useCallback(async (nodeId, choiceId, updates) => {
+    setNodes(prev => {
+      const newNodes = new Map(prev);
+      const node = newNodes.get(nodeId);
+      if (node) {
+        const updatedChoices = node.choices.map(choice => 
+          choice.id === choiceId ? { ...choice, ...updates } : choice
+        );
+        newNodes.set(nodeId, { ...node, choices: updatedChoices });
+      }
+      return newNodes;
+    });
+    
+    updateNodeVersion(nodeId);
+    if (updates.targetSceneId !== undefined) {
+      generateConnections(nodeId);
+    }
+  }, [updateNodeVersion, generateConnections]);
+  
+  const handleStatAddCommand = useCallback(async (statData) => {
+    setAdventure(prev => ({
+      ...prev,
+      stats: [...prev.stats, statData],
+      metadata: { ...prev.metadata, modified: Date.now() }
+    }));
+  }, []);
+  
+  const handleStatUpdateCommand = useCallback(async (statId, updates) => {
+    setAdventure(prev => ({
+      ...prev,
+      stats: prev.stats.map(stat => 
+        stat.id === statId ? { ...stat, ...updates } : stat
+      ),
+      metadata: { ...prev.metadata, modified: Date.now() }
+    }));
+  }, []);
+  
+  const handleStatDeleteCommand = useCallback(async (statId) => {
+    setAdventure(prev => ({
+      ...prev,
+      stats: prev.stats.filter(stat => stat.id !== statId),
+      metadata: { ...prev.metadata, modified: Date.now() }
+    }));
+  }, []);
+  
+  const handleConnectionCreateCommand = useCallback(async (connectionData) => {
+    setConnections(prev => new Map(prev.set(connectionData.id, connectionData)));
+  }, []);
+  
+  const handleConnectionDeleteCommand = useCallback(async (connectionId) => {
+    setConnections(prev => {
+      const newConnections = new Map(prev);
+      newConnections.delete(connectionId);
+      return newConnections;
+    });
+  }, []);
+  
+  const handleAdventureImportCommand = useCallback(async (adventureData) => {
+    handleImport(adventureData);
+  }, []);
+  
+  const handleAdventureClearCommand = useCallback(async () => {
+    setNodes(new Map());
+    setConnections(new Map());
+    setSelectedNodeId(null);
+    initializeSampleAdventure();
+  }, []);
+
+  const handleNodeCreate = useCallback((position) => {
+    const nodeId = `scene_${Date.now()}`;
+    const newNode = {
+      id: nodeId,
+      title: 'New Scene',
+      content: '',
+      choices: [],
+      position: position,
+      isStartScene: false,
+      onEnter: [],
+      onExit: [],
+      tags: [],
+      category: 'general',
+      requiredItems: []
+    };
+    
+    const command = new CreateNodeCommand(
+      newNode, 
+      position, 
+      { nodes, connections },
+      commandCallbacks.current
+    );
+    
+    executeCommand(command);
+  }, [nodes, connections, executeCommand]);
+
+  const handleNodeUpdate = useCallback((nodeId, updates) => {
+    const node = nodes.get(nodeId);
+    if (!node) return;
+    
+    // Create commands for each property update
+    const commands = [];
+    
+    for (const [property, newValue] of Object.entries(updates)) {
+      const oldValue = node[property];
+      if (oldValue !== newValue) {
+        commands.push(new UpdateNodeCommand(
+          nodeId, 
+          property, 
+          oldValue, 
+          newValue, 
+          commandCallbacks.current
+        ));
+      }
+    }
+    
+    if (commands.length === 1) {
+      executeCommand(commands[0]);
+    } else if (commands.length > 1) {
+      const bulkCommand = new BulkOperationCommand(
+        'update_nodes',
+        [{ nodeId, updates, oldValues: node }],
+        commandCallbacks.current,
+        { editorState: { nodes, connections } }
+      );
+      executeCommand(bulkCommand);
+    }
+  }, [nodes, connections, executeCommand]);
+
+  const handleNodeMove = useCallback((nodeId, position) => {
+    const node = nodes.get(nodeId);
+    if (!node) return;
+    
+    const command = new MoveNodeCommand(
+      nodeId,
+      node.position,
+      position,
+      commandCallbacks.current
+    );
+    
+    executeCommand(command);
+  }, [nodes, executeCommand]);
+
+  // Live drag handler - updates node position immediately without creating history entries
+  const handleNodeDrag = useCallback((nodeId, position) => {
+    setNodes(prev => {
+      const newNodes = new Map(prev);
+      const node = newNodes.get(nodeId);
+      if (node) {
+        newNodes.set(nodeId, { ...node, position });
+      }
+      return newNodes;
+    });
+  }, []);
+
+  const handleNodeDelete = useCallback((nodeId) => {
+    const node = nodes.get(nodeId);
+    if (!node) return;
+    
+    if (node.isStartScene) {
+      alert('Cannot delete the start scene. Set another scene as start first.');
+      return;
+    }
+
+    const command = new DeleteNodeCommand(
+      nodeId,
+      { nodes, connections },
+      commandCallbacks.current
+    );
+    
+    executeCommand(command);
+  }, [nodes, connections, executeCommand]);
 
   const handleSetStartScene = useCallback((nodeId) => {
     setNodes(prev => {
@@ -631,13 +1089,25 @@ export default function EditorScreen({
   // Enhanced project operations
   const handleNewProject = async (projectName) => {
     try {
-      const project = await editorSession.createProject(projectName, {
-        title: projectName,
-        adventureData: generateAdventureData()
-      });
+      const projectData = {
+        name: projectName,
+        data: {
+          title: projectName,
+          adventureData: generateAdventureData()
+        }
+      };
+      
+      const project = await editorSession.createNewProject(projectData);
       setCurrentProject(project);
-      initializeSampleAdventure();
+      
+      // Reload project list and get current project
       await loadProjectList();
+      const currentProj = await editorSession.getCurrentProject();
+      if (currentProj) {
+        setCurrentProject(currentProj);
+      }
+      
+      initializeSampleAdventure();
       setHasUnsavedChanges(false);
     } catch (error) {
       alert(`Failed to create project: ${error.message}`);
@@ -653,20 +1123,51 @@ export default function EditorScreen({
     setLastSaved(projectData.project.modified);
   };
 
-  const handleSaveProject = async () => {
-    if (!currentProject) return;
-    
+  const handleSaveProject = async (saveAsName = null) => {
     try {
       const adventureData = generateAdventureData();
-      await editorSession.saveProject(currentProject.id, {
-        ...currentProject,
-        adventureData: adventureData,
-        modified: Date.now()
-      });
-      
-      setLastSaved(Date.now());
-      setHasUnsavedChanges(false);
+
+      if (saveAsName && typeof saveAsName === 'string' && saveAsName.trim()) {
+        // Save as new project (duplicate current content under a new name)
+        const projectRecord = await editorSession.createNewProject({
+          name: saveAsName.trim(),
+          data: { adventureData }
+        });
+
+        // Set newly created project as current
+        setCurrentProject(projectRecord);
+        setLastSaved(projectRecord.modified || Date.now());
+        setHasUnsavedChanges(false);
+
+      } else {
+        // Regular save (if no current project, create one)
+        if (!currentProject) {
+          const projectName = prompt('Enter project name:');
+          if (!projectName) return;
+          const created = await editorSession.createNewProject({
+            name: projectName,
+            data: { adventureData }
+          });
+          setCurrentProject(created);
+          setLastSaved(created.modified || Date.now());
+          setHasUnsavedChanges(false);
+        } else {
+          const updated = await editorSession.saveProject(currentProject.id, {
+            ...currentProject,
+            adventureData: adventureData,
+            modified: Date.now()
+          });
+
+          setLastSaved(updated.modified || Date.now());
+          setHasUnsavedChanges(false);
+        }
+      }
+
+      // Refresh project list and set current project from storage
       await loadProjectList();
+      const refreshed = await editorSession.getCurrentProject();
+      if (refreshed) setCurrentProject(refreshed);
+
     } catch (error) {
       alert(`Failed to save project: ${error.message}`);
     }
@@ -715,8 +1216,19 @@ export default function EditorScreen({
     URL.revokeObjectURL(url);
   }, [adventure, nodes]);
 
-  // Enhanced import with validation
+  // Enhanced import with command system
   const handleImport = useCallback((adventureData) => {
+    const command = new ImportAdventureCommand(
+      adventureData,
+      generateAdventureData(),
+      commandCallbacks.current
+    );
+    
+    executeCommand(command);
+  }, [executeCommand]);
+  
+  // Internal import handler (called by command)
+  const handleImportInternal = useCallback((adventureData) => {
     try {
       setAdventure({
         id: adventureData.id || 'imported_adventure',
@@ -764,10 +1276,214 @@ export default function EditorScreen({
       
       setNodes(importedNodes);
       setSelectedNodeId(null);
-      setHasUnsavedChanges(true);
     } catch (error) {
       alert('Error importing adventure: ' + error.message);
+      throw error;
     }
+  }, []);
+  
+  // Update command callback to use internal handler
+  useEffect(() => {
+    if (commandCallbacks.current) {
+      commandCallbacks.current.onAdventureImport = handleImportInternal;
+    }
+  }, [handleImportInternal]);
+  
+  // Keyboard shortcuts for undo/redo
+  useEffect(() => {
+    const handleKeyDown = (event) => {
+      // Check if we're in an input field - don't intercept if so
+      const isInputField = event.target.tagName === 'INPUT' || 
+                          event.target.tagName === 'TEXTAREA' || 
+                          event.target.contentEditable === 'true';
+                          
+      if (isInputField) return;
+      
+      // Handle Ctrl+Z (Undo)
+      if (event.ctrlKey && event.key === 'z' && !event.shiftKey) {
+        event.preventDefault();
+        if (canUndo) {
+          handleUndo();
+        }
+        return;
+      }
+      
+      // Handle Ctrl+Y or Ctrl+Shift+Z (Redo)
+      if ((event.ctrlKey && event.key === 'y') || 
+          (event.ctrlKey && event.shiftKey && event.key === 'z')) {
+        event.preventDefault();
+        if (canRedo) {
+          handleRedo();
+        }
+        return;
+      }
+      
+      // Handle Ctrl+H (Show/Hide Command History)
+      if (event.ctrlKey && event.key === 'h' && !event.shiftKey) {
+        event.preventDefault();
+        setCommandHistoryVisible(prev => !prev);
+        return;
+      }
+      
+      // Handle Ctrl+S (Manual Save)
+      if (event.ctrlKey && event.key === 's' && !event.shiftKey) {
+        event.preventDefault();
+        handleManualSave();
+        return;
+      }
+      
+      // Handle Ctrl+F (Search Panel)
+      if (event.ctrlKey && event.key === 'f' && !event.shiftKey) {
+        event.preventDefault();
+        setSearchPanelVisible(prev => !prev);
+        return;
+      }
+    };
+    
+    // Add event listener to document
+    document.addEventListener('keydown', handleKeyDown);
+    
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [canUndo, canRedo, handleUndo, handleRedo]);
+  
+  // Manual save handler
+  const handleManualSave = useCallback(async () => {
+    if (!currentProject) {
+      // No current project - create new one
+      const projectName = prompt('Save as new project (enter name):', adventure.title);
+      if (!projectName) return;
+      
+      try {
+        const adventureData = generateAdventureData();
+        const newProject = await editorSession.createNewProject({
+          name: projectName,
+          data: { adventureData }
+        });
+        
+        setCurrentProject(newProject);
+        setLastSaved(newProject.created);
+        setHasUnsavedChanges(false);
+        alert('Project saved successfully!');
+      } catch (error) {
+        alert(`Failed to save project: ${error.message}`);
+      }
+    } else {
+      // Save existing project
+      try {
+        const adventureData = generateAdventureData();
+        await editorSession.forceSave(currentProject.id, {
+          title: adventure.title,
+          data: { adventureData }
+        });
+        
+        setLastSaved(Date.now());
+        setHasUnsavedChanges(false);
+        
+        // Show brief confirmation
+        const statusElement = document.querySelector('[data-save-status]');
+        if (statusElement) {
+          statusElement.textContent = 'Saved!';
+          setTimeout(() => {
+            statusElement.textContent = '';
+          }, 1500);
+        }
+      } catch (error) {
+        alert(`Failed to save project: ${error.message}`);
+      }
+    }
+  }, [currentProject, adventure.title, editorSession, generateAdventureData]);
+  
+  // Search panel handlers
+  const handleSearchNavigate = useCallback((nodeId, matchData) => {
+    setSelectedNodeId(nodeId);
+    
+    // Center on the selected node
+    const node = nodes.get(nodeId);
+    if (node && node.position) {
+      // Focus on the node by updating viewport if needed
+      // This would typically require canvas integration
+      console.log('Navigating to node:', nodeId, matchData);
+    }
+  }, [nodes]);
+  
+  const handleSearchHighlight = useCallback((highlightData) => {
+    setSearchHighlights(highlightData);
+  }, []);
+  
+  const handleSearchReplace = useCallback((replacements) => {
+    // Apply all replacements using command system
+    const commands = [];
+    
+    replacements.forEach(replacement => {
+      const node = nodes.get(replacement.nodeId);
+      if (!node) return;
+      
+      let updatedText = replacement.original.replace(replacement.match, replacement.replacement);
+      
+      if (replacement.type === 'title') {
+        const command = new UpdateNodeCommand(
+          replacement.nodeId,
+          'title',
+          node.title,
+          updatedText,
+          commandCallbacks.current
+        );
+        commands.push(command);
+      } else if (replacement.type === 'content') {
+        const command = new UpdateNodeCommand(
+          replacement.nodeId,
+          'content',
+          node.content,
+          updatedText,
+          commandCallbacks.current
+        );
+        commands.push(command);
+      } else if (replacement.type === 'choice' && replacement.choiceId) {
+        const choice = node.choices?.find(c => c.id === replacement.choiceId);
+        if (choice) {
+          const command = new UpdateChoiceCommand(
+            replacement.nodeId,
+            replacement.choiceId,
+            'text',
+            choice.text,
+            updatedText,
+            commandCallbacks.current
+          );
+          commands.push(command);
+        }
+      }
+    });
+    
+    // Execute all commands as a bulk operation
+    if (commands.length > 0) {
+      const bulkCommand = new BulkOperationCommand(
+        commands,
+        `Replace ${commands.length} occurrences`,
+        commandCallbacks.current
+      );
+      executeCommand(bulkCommand);
+    }
+  }, [nodes, executeCommand]);
+  
+  // Listen for action history and search panel events
+  useEffect(() => {
+    const handleShowActionHistory = () => {
+      setCommandHistoryVisible(true);
+    };
+    
+    const handleShowSearchPanel = () => {
+      setSearchPanelVisible(true);
+    };
+    
+    window.addEventListener('showActionHistory', handleShowActionHistory);
+    window.addEventListener('showSearchPanel', handleShowSearchPanel);
+    
+    return () => {
+      window.removeEventListener('showActionHistory', handleShowActionHistory);
+      window.removeEventListener('showSearchPanel', handleShowSearchPanel);
+    };
   }, []);
 
   // Enhanced validation with Phase 3 features
@@ -826,6 +1542,55 @@ export default function EditorScreen({
     return { errors, warnings };
   }, [adventure, nodes]);
 
+  // Subscribe to ValidationService events so the error tracker updates in real time
+  useEffect(() => {
+    const handleValidationComplete = ({ adventure: adv, result }) => {
+      if (!result) return;
+      // Map result entries to simple strings for toolbar display (keep full objects internally if needed later)
+      const errors = (result.errors || []).map(e => (typeof e === 'string' ? e : e.message || JSON.stringify(e)));
+      const warnings = (result.warnings || []).map(w => (typeof w === 'string' ? w : w.message || JSON.stringify(w)));
+
+      setValidationErrors(errors);
+      setValidationWarnings(warnings);
+    };
+
+    const handleValidationError = ({ error }) => {
+      setValidationErrors([`Validation system error: ${error?.message || String(error)}`]);
+      setValidationWarnings([]);
+    };
+
+    validationService.on('validation-complete', handleValidationComplete);
+    validationService.on('validation-cached', handleValidationComplete);
+    validationService.on('validation-error', handleValidationError);
+
+    return () => {
+      validationService.off('validation-complete', handleValidationComplete);
+      validationService.off('validation-cached', handleValidationComplete);
+      validationService.off('validation-error', handleValidationError);
+    };
+  }, []);
+
+  // Auto-validate (debounced) when nodes or adventure change so toolbar updates live
+  useEffect(() => {
+    if (validationDebounceRef.current) {
+      clearTimeout(validationDebounceRef.current);
+    }
+
+    validationDebounceRef.current = setTimeout(() => {
+      try {
+        const adv = generateAdventureData();
+        // Fire-and-forget; ValidationService will emit events we subscribed to above
+        validationService.validate(adv, { realTimeMode: true, includeContext: false }).catch(() => {});
+      } catch (e) {
+        // ignore
+      }
+    }, 400);
+
+    return () => {
+      if (validationDebounceRef.current) clearTimeout(validationDebounceRef.current);
+    };
+  }, [nodes, adventure]);
+
   // Context menu operations
   const handleNodeContextMenu = useCallback((nodeId, position, nodeData) => {
     setContextMenu({
@@ -845,35 +1610,33 @@ export default function EditorScreen({
     });
   }, []);
 
-  // Generate connections from node choices
-  const generateConnections = useCallback(() => {
-    const newConnections = new Map();
-    
-    nodes.forEach((node) => {
-      if (node.choices) {
-        node.choices.forEach((choice) => {
-          if (choice.targetSceneId && nodes.has(choice.targetSceneId)) {
-            const connectionId = `${node.id}_${choice.id}_${choice.targetSceneId}`;
-            newConnections.set(connectionId, {
-              id: connectionId,
-              fromNodeId: node.id,
-              toNodeId: choice.targetSceneId,
-              choiceId: choice.id,
-              choice: choice
-            });
-          }
-        });
-      }
-    });
-    
-    setConnections(newConnections);
-  }, [nodes]);
+  // ...generateConnections is declared earlier to avoid TDZ
 
+  // Memoized connection data for rendering performance
+  const connectionArray = useMemo(() => {
+    return Array.from(connections.values());
+  }, [connections]);
+
+  // Intelligently handle connection generation based on changes
   useEffect(() => {
-    generateConnections();
-  }, [generateConnections]);
+    if (nodes.size > 0) {
+      // Check if this is initial load or a structural change
+      const hasConnectionsForAllNodes = Array.from(nodes.keys()).every(nodeId =>
+  connectionCacheEarly.current.has(`${nodeId}_version`)
+      );
 
-  // Enhanced choice operations with Phase 3 features
+      if (!hasConnectionsForAllNodes) {
+        // Full regeneration needed for initial load or major changes
+        generateConnections();
+      }
+    } else {
+      // Clear connections when no nodes
+      setConnections(new Map());
+  connectionCacheEarly.current.clear();
+    }
+  }, [nodes.size, generateConnections]);
+
+  // Enhanced choice operations with command system
   const handleChoiceAdd = useCallback((nodeId) => {
     const choiceId = `choice_${Date.now()}`;
     const newChoice = {
@@ -891,28 +1654,60 @@ export default function EditorScreen({
       oneTime: false
     };
 
-    handleNodeUpdate(nodeId, {
-      choices: [...(nodes.get(nodeId)?.choices || []), newChoice]
-    });
-  }, [nodes, handleNodeUpdate]);
+    const command = new CreateChoiceCommand(
+      nodeId,
+      newChoice,
+      commandCallbacks.current
+    );
+    
+    executeCommand(command);
+  }, [executeCommand]);
 
   const handleChoiceUpdate = useCallback((nodeId, choiceId, updates) => {
     const node = nodes.get(nodeId);
-    if (node) {
-      const updatedChoices = node.choices.map(choice =>
-        choice.id === choiceId ? { ...choice, ...updates } : choice
-      );
-      handleNodeUpdate(nodeId, { choices: updatedChoices });
+    if (!node) return;
+
+    const choice = node.choices.find(c => c.id === choiceId);
+    if (!choice) return;
+
+    // Create commands for each property update
+    const commands = [];
+
+    for (const [property, newValue] of Object.entries(updates)) {
+      const oldValue = choice[property];
+      if (oldValue !== newValue) {
+        commands.push(new UpdateChoiceCommand(
+          nodeId,
+          choiceId,
+          property,
+          oldValue,
+          newValue,
+          commandCallbacks.current
+        ));
+      }
     }
-  }, [nodes, handleNodeUpdate]);
+    
+    if (commands.length === 1) {
+      executeCommand(commands[0]);
+    } else if (commands.length > 1) {
+      // Execute multiple choice updates as a batch
+      executeCommand(commands[0]); // For now, execute individually
+      for (let i = 1; i < commands.length; i++) {
+        setTimeout(() => executeCommand(commands[i]), i * 10);
+      }
+    }
+  }, [nodes, executeCommand]);
 
   const handleChoiceDelete = useCallback((nodeId, choiceId) => {
-    const node = nodes.get(nodeId);
-    if (node) {
-      const filteredChoices = node.choices.filter(choice => choice.id !== choiceId);
-      handleNodeUpdate(nodeId, { choices: filteredChoices });
-    }
-  }, [nodes, handleNodeUpdate]);
+    const command = new DeleteChoiceCommand(
+      nodeId,
+      choiceId,
+      { nodes, connections },
+      commandCallbacks.current
+    );
+    
+    executeCommand(command);
+  }, [nodes, connections, executeCommand]);
 
   // Dialog operations
   const closeDialog = useCallback(() => {
@@ -942,7 +1737,7 @@ export default function EditorScreen({
     setHasUnsavedChanges(true);
   }, []);
 
-  // Stats management with Phase 3 features
+  // Stats management with command system
   const handleStatAdd = useCallback(() => {
     const statId = `stat_${Date.now()}`;
     const newStat = {
@@ -958,33 +1753,44 @@ export default function EditorScreen({
       noExport: false
     };
 
-    setAdventure(prev => ({
-      ...prev,
-      stats: [...prev.stats, newStat],
-      metadata: { ...prev.metadata, modified: Date.now() }
-    }));
-    setHasUnsavedChanges(true);
-  }, []);
+    const command = new UpdateStatsCommand(
+      'add',
+      newStat,
+      adventure.stats,
+      commandCallbacks.current
+    );
+    
+    executeCommand(command);
+  }, [adventure.stats, executeCommand]);
 
   const handleStatUpdate = useCallback((statId, updates) => {
-    setAdventure(prev => ({
-      ...prev,
-      stats: prev.stats.map(stat => 
-        stat.id === statId ? { ...stat, ...updates } : stat
-      ),
-      metadata: { ...prev.metadata, modified: Date.now() }
-    }));
-    setHasUnsavedChanges(true);
-  }, []);
+    const oldStat = adventure.stats.find(s => s.id === statId);
+    if (!oldStat) return;
+    
+    const updatedStat = { ...oldStat, ...updates };
+    const command = new UpdateStatsCommand(
+      'update',
+      updatedStat,
+      adventure.stats,
+      commandCallbacks.current
+    );
+    
+    executeCommand(command);
+  }, [adventure.stats, executeCommand]);
 
   const handleStatDelete = useCallback((statId) => {
-    setAdventure(prev => ({
-      ...prev,
-      stats: prev.stats.filter(stat => stat.id !== statId),
-      metadata: { ...prev.metadata, modified: Date.now() }
-    }));
-    setHasUnsavedChanges(true);
-  }, []);
+    const statToDelete = adventure.stats.find(s => s.id === statId);
+    if (!statToDelete) return;
+    
+    const command = new UpdateStatsCommand(
+      'delete',
+      statToDelete,
+      adventure.stats,
+      commandCallbacks.current
+    );
+    
+    executeCommand(command);
+  }, [adventure.stats, executeCommand]);
 
   const selectedNode = selectedNodeId ? nodes.get(selectedNodeId) : null;
 
@@ -1006,10 +1812,15 @@ export default function EditorScreen({
       hasUnsavedChanges: hasUnsavedChanges,
       exportFormats: ['json', 'yaml', 'xml'],
       sessionStorage: editorSession,
-      onNewAdventure: () => {
+      onProjectListRefresh: loadProjectList,
+      onNewAdventure: async (projectName) => {
         if (!hasUnsavedChanges || confirm('Create new adventure? Unsaved changes will be lost.')) {
-          initializeSampleAdventure();
-          setCurrentProject(null);
+          if (projectName) {
+            await handleNewProject(projectName);
+          } else {
+            initializeSampleAdventure();
+            setCurrentProject(null);
+          }
         }
       },
       onImportAdventure: handleImport,
@@ -1038,7 +1849,15 @@ export default function EditorScreen({
         if (enabled && hasUnsavedChanges) {
           handleAutoSave();
         }
-      }
+      },
+      // Command system props
+      canUndo: canUndo,
+      canRedo: canRedo,
+      undoDescription: undoDescription,
+      redoDescription: redoDescription,
+      onUndo: handleUndo,
+      onRedo: handleRedo,
+      commandHistory: commandHistory
     }),
 
     React.createElement('div', {
@@ -1052,7 +1871,8 @@ export default function EditorScreen({
         connections: connections,
         selectedNodeId: selectedNodeId,
         onNodeSelect: setSelectedNodeId,
-        onNodeMove: handleNodeMove,
+  onNodeMove: handleNodeMove,
+  onNodeDrag: handleNodeDrag,
         onNodeCreate: handleNodeCreate,
         onNodeContextMenu: handleNodeContextMenu,
         onConnectionCreate: (fromId, toId) => {
@@ -1067,6 +1887,7 @@ export default function EditorScreen({
         adventureInventory: adventure.inventory,
         adventureAchievements: adventure.achievements,
         adventureFlags: adventure.flags,
+    availableScenes: Array.from(nodes.values()),
         onNodeUpdate: handleNodeUpdate,
         onChoiceAdd: handleChoiceAdd,
         onChoiceUpdate: handleChoiceUpdate,
@@ -1109,9 +1930,10 @@ export default function EditorScreen({
       isOpen: activeDialog === 'advanced-choice',
       choice: activeDialog === 'advanced-choice' ? dialogData?.choice : null,
       availableScenes: activeDialog === 'advanced-choice' ? dialogData?.availableScenes || [] : [],
-      adventureStats: adventure.stats,
-      adventureInventory: adventure.inventory,
-      adventureFlags: adventure.flags,
+      availableStats: adventure.stats || [],
+      availableFlags: adventure.flags || [],
+      availableItems: adventure.inventory || [],
+      existingChoices: selectedNode?.choices || [],
       onSave: handleChoiceSave,
       onCancel: closeDialog,
       onDelete: (choiceId) => {
@@ -1134,6 +1956,36 @@ export default function EditorScreen({
         setShowInventoryEditor(false);
       },
       onCancel: () => setShowInventoryEditor(false)
+    }),
+
+    React.createElement(ActionHistoryDialog, {
+      key: 'action-history-dialog',
+      isOpen: commandHistoryVisible,
+      commandHistory: commandHistory,
+      onClose: () => setCommandHistoryVisible(false),
+      onJumpToCommand: async (commandIndex) => {
+        try {
+          await commandHistory.jumpToIndex(commandIndex);
+        } catch (error) {
+          console.error('Failed to jump to command:', error);
+          alert(`Failed to jump to command: ${error.message}`);
+        }
+      },
+      onClearHistory: () => {
+        commandHistory.clear();
+        setCommandHistoryVisible(false);
+      }
+    }),
+
+    React.createElement(SearchPanel, {
+      key: 'search-panel',
+      isOpen: searchPanelVisible,
+      nodes: nodes,
+      adventure: adventure,
+      onClose: () => setSearchPanelVisible(false),
+      onNavigateToNode: handleSearchNavigate,
+      onHighlightMatches: handleSearchHighlight,
+      onReplaceAll: handleSearchReplace
     })
   ]);
 }

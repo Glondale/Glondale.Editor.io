@@ -8,7 +8,7 @@ import { ExportableDataManager } from '../engine/ExportableDataManager.js';
 import React, { createContext, useContext, useReducer, useEffect } from "https://esm.sh/react@18";
 
 // Enhanced game state reducer with Phase 3 features
-function gameReducer(state, action) {
+export function gameReducer(state, action) {
   switch (action.type) {
     case 'LOAD_ADVENTURE':
       return {
@@ -298,7 +298,30 @@ function gameReducer(state, action) {
       };
 
     case 'RESET_GAME':
-      return initialGameState;
+      return {
+        ...initialGameState,
+        // Re-create Phase 3 additions so reset preserves expected shape
+        inventory: [],
+        inventoryState: {
+          totalWeight: 0,
+          totalValue: 0,
+          categories: {},
+          lastModified: Date.now()
+        },
+        secretsDiscovered: [],
+        secretChoicesAvailable: [],
+        achievements: [],
+        crossGameImports: [],
+        gameplayMetrics: {
+          totalChoicesMade: 0,
+          uniqueScenesVisited: 0,
+          secretsFound: 0,
+          achievementsUnlocked: 0,
+          estimatedPlayTime: 0
+        },
+        autoSaveEnabled: true,
+        autoSaveInterval: 300000
+      };
 
     // Auto-save management
     case 'SET_AUTO_SAVE_ENABLED':
@@ -348,11 +371,30 @@ export function GameProvider({ children }) {
     autoSaveInterval: 300000 // 5 minutes
   });
   
-  // Initialize engines with Phase 3 support
-  const storyEngine = new StoryEngine();
-  const saveSystem = new SaveSystem(storyEngine);
-  const crossGameSaveSystem = new CrossGameSaveSystem();
-  const exportableDataManager = new ExportableDataManager();
+  // Initialize engines with Phase 3 support and keep them stable across re-renders
+  const storyEngineRef = React.useRef(null);
+  if (!storyEngineRef.current) {
+    storyEngineRef.current = new StoryEngine();
+  }
+  const storyEngine = storyEngineRef.current;
+
+  const saveSystemRef = React.useRef(null);
+  if (!saveSystemRef.current) {
+    saveSystemRef.current = new SaveSystem(storyEngine);
+  }
+  const saveSystem = saveSystemRef.current;
+
+  const crossGameSaveSystemRef = React.useRef(null);
+  if (!crossGameSaveSystemRef.current) {
+    crossGameSaveSystemRef.current = new CrossGameSaveSystem();
+  }
+  const crossGameSaveSystem = crossGameSaveSystemRef.current;
+
+  const exportableDataManagerRef = React.useRef(null);
+  if (!exportableDataManagerRef.current) {
+    exportableDataManagerRef.current = new ExportableDataManager();
+  }
+  const exportableDataManager = exportableDataManagerRef.current;
 
   // Auto-save effect
   useEffect(() => {
@@ -392,13 +434,18 @@ export function GameProvider({ children }) {
 
   // Enhanced action helpers with Phase 3 features
   const actions = {
-    loadAdventure: (adventure) => {
+    loadAdventure: async (adventure) => {
       try {
-        storyEngine.loadAdventure(adventure);
+        console.log('GameContext: loadAdventure called with:', adventure?.title);
+        // Wait for the story engine to finish loading and navigating to the start scene
+        await storyEngine.loadAdventure(adventure);
         dispatch({ type: 'LOAD_ADVENTURE', payload: adventure });
         const scene = storyEngine.getCurrentScene();
+        console.log('GameContext: storyEngine current scene after load:', scene?.id, scene?.title);
         if (scene) {
           dispatch({ type: 'SET_SCENE', payload: scene });
+        } else {
+          console.warn('GameContext: no scene returned by storyEngine after loadAdventure');
         }
       } catch (error) {
         dispatch({ type: 'SET_ERROR', payload: error instanceof Error ? error.message : 'Failed to load adventure' });

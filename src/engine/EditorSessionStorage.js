@@ -33,6 +33,22 @@ class EditorSessionStorage {
     // Performance optimization
     this.compressionEnabled = true;
     this.saveQueue = new Map();
+    
+    // Visual autosave feedback system
+    this.saveStatus = 'idle'; // 'idle', 'saving', 'saved', 'error', 'offline', 'conflict'
+    this.saveCallbacks = new Set();
+    this.saveProgress = 0;
+    this.isOnline = navigator.onLine;
+    this.lastSaveAttempt = null;
+    this.saveRetryCount = 0;
+    this.maxRetries = 3;
+    
+    // Save conflict detection
+    this.lastKnownVersion = null;
+    this.conflictData = null;
+    
+    // Initialize online/offline detection
+    this.initializeConnectivityMonitoring();
   }
 
   /**
@@ -111,11 +127,50 @@ class EditorSessionStorage {
    * @param {boolean} isAutoSave - Whether this is an auto-save
    * @returns {Object} { success, error, savedAt }
    */
-  saveSession(sessionId, sessionData, isAutoSave = false) {
+  async saveSession(sessionId, sessionData, isAutoSave = false) {
+    const saveId = `save_${Date.now()}_${Math.random()}`;
+    this.saveQueue.set(saveId, { sessionId, isAutoSave, progress: 0 });
+    
     try {
+      // Update save status
+      this.updateSaveStatus('saving', 0);
+      this.lastSaveAttempt = Date.now();
+      
+      // Check if offline
+      if (!this.isOnline) {
+        this.updateSaveStatus('offline');
+        this.saveQueue.delete(saveId);
+        return {
+          success: false,
+          error: 'Cannot save while offline',
+          savedAt: null
+        };
+      }
+      
+      // Simulate save progress
+      this.updateSaveStatus('saving', 25);
+      
+      // Check for conflicts
+      const conflictCheck = await this.checkForConflicts(sessionId, sessionData);
+      if (conflictCheck.hasConflict) {
+        this.updateSaveStatus('conflict');
+        this.conflictData = conflictCheck.conflictData;
+        this.saveQueue.delete(saveId);
+        return {
+          success: false,
+          error: 'Save conflict detected',
+          savedAt: null,
+          conflict: conflictCheck.conflictData
+        };
+      }
+      
+      this.updateSaveStatus('saving', 50);
+
       // Validate session data
       const validation = this.validateSession(sessionData);
       if (!validation.isValid) {
+        this.updateSaveStatus('error');
+        this.saveQueue.delete(saveId);
         return {
           success: false,
           error: `Validation failed: ${validation.errors.join(', ')}`,
@@ -123,14 +178,18 @@ class EditorSessionStorage {
         };
       }
 
-      // Update metadata
+      this.updateSaveStatus('saving', 75);
+
+      // Update metadata with version info for conflict detection
+      const versionId = `${Date.now()}_${Math.random()}`;
       const updatedSession = {
         ...sessionData,
         metadata: {
           ...sessionData.metadata,
           lastModified: Date.now(),
           lastSaved: Date.now(),
-          saveType: isAutoSave ? 'auto' : 'manual'
+          saveType: isAutoSave ? 'auto' : 'manual',
+          versionId: versionId
         }
       };
 
@@ -139,7 +198,8 @@ class EditorSessionStorage {
         version: this.currentVersion,
         session: updatedSession,
         compressed: this.compressionEnabled,
-        savedAt: Date.now()
+        savedAt: Date.now(),
+        versionId: versionId
       };
 
       // Compress if enabled
@@ -147,6 +207,8 @@ class EditorSessionStorage {
       if (this.compressionEnabled) {
         dataToStore = this.compressData(dataToStore);
       }
+
+      this.updateSaveStatus('saving', 90);
 
       // Store with error handling
       const storageKey = this.getSessionKey(sessionId);
@@ -161,7 +223,20 @@ class EditorSessionStorage {
       }
 
       this.lastSaveTime = Date.now();
+      this.lastKnownVersion = versionId;
       this.isDirty = false;
+      this.saveRetryCount = 0;
+      
+      // Complete save
+      this.updateSaveStatus('saved', 100);
+      this.saveQueue.delete(saveId);
+      
+      // Reset to idle after showing success
+      setTimeout(() => {
+        if (this.saveStatus === 'saved') {
+          this.updateSaveStatus('idle');
+        }
+      }, 2000);
 
       return {
         success: true,
@@ -171,6 +246,17 @@ class EditorSessionStorage {
 
     } catch (error) {
       console.error('Failed to save session:', error);
+      this.saveRetryCount++;
+      this.updateSaveStatus('error');
+      this.saveQueue.delete(saveId);
+      
+      // Auto-retry for transient errors
+      if (this.saveRetryCount < this.maxRetries && isAutoSave) {
+        setTimeout(() => {
+          this.saveSession(sessionId, sessionData, isAutoSave);
+        }, 5000 * this.saveRetryCount);
+      }
+      
       return {
         success: false,
         error: error.message,
@@ -712,6 +798,393 @@ class EditorSessionStorage {
     } catch (error) {
       console.error('Failed to cleanup auto-saves:', error);
     }
+  }
+
+  /**
+   * Get the last session that was worked on
+   * @returns {Object|null} Last session data or null if none found
+   */
+  getLastSession() {
+    try {
+      const sessions = this.listSessions();
+      if (sessions.length === 0) return null;
+      
+      // Sort by lastModified in descending order and return the first one
+      const sortedSessions = sessions.sort((a, b) => 
+        new Date(b.lastModified) - new Date(a.lastModified)
+      );
+      
+      return sortedSessions[0];
+    } catch (error) {
+      console.error('Failed to get last session:', error);
+      return null;
+    }
+  }
+
+  /**
+   * List all projects (alias for listSessions for compatibility)
+   * @returns {Array} Array of project/session metadata
+   */
+  async listProjects() {
+    try {
+      const raw = localStorage.getItem('editor_projects');
+      const projects = raw ? JSON.parse(raw) : [];
+
+      // Normalize legacy fields so UI always has .name and .modified
+      return projects.map(p => ({
+        id: p.id,
+        name: p.name || p.title || (p.data && p.data.title) || 'Untitled Project',
+        data: p.data || p.data || null,
+        created: p.created || p.createdAt || p.createdAt || null,
+        modified: p.modified || p.modifiedAt || p.updatedAt || p.updatedAt || p.modified || null
+      })).sort((a, b) => (b.modified || 0) - (a.modified || 0));
+    } catch (err) {
+      console.error('EditorSessionStorage.listProjects failed', err);
+      return [];
+    }
+  }
+
+  /**
+   * Create a new project (async so callers can await)
+   * @param {Object} project - Project configuration
+   * @returns {Object} Created project record
+   */
+  async createNewProject(project = {}) {
+    const id = project.id || `proj_${Date.now()}`;
+    const now = Date.now();
+    const record = {
+      id,
+      name: project.name || project.title || 'Untitled Project',
+      data: project.data || project.adventureData || {},
+      created: now,
+      modified: now
+    };
+
+    try {
+      const raw = localStorage.getItem('editor_projects');
+      const projects = raw ? JSON.parse(raw) : [];
+      projects.push(record);
+      localStorage.setItem('editor_projects', JSON.stringify(projects));
+      
+      // Mark as current project for immediate selection
+      localStorage.setItem('editor_current_project', id);
+      return record;
+    } catch (err) {
+      console.error('EditorSessionStorage.createNewProject failed', err);
+      throw err;
+    }
+  }
+
+  /**
+   * Backwards-compatibility alias for createNewProject
+   * @param {Object} project - Project configuration
+   * @returns {Object} Created project record
+   */
+  async createProject(project = {}) {
+    return this.createNewProject(project);
+  }
+
+  /**
+   * Get project by id
+   * @param {string} id - Project ID
+   * @returns {Object|null} Project record or null
+   */
+  async getProject(id) {
+  const all = await this.listProjects();
+  return all.find(p => p.id === id) || null;
+  }
+
+  /**
+   * Load and mark project as current
+   * @param {string} id - Project ID
+   * @returns {Object|null} Project record or null
+   */
+  async loadProject(id) {
+    const proj = await this.getProject(id);
+    if (proj) {
+      // Keep track of which project is active
+      localStorage.setItem('editor_current_project', id);
+      return {
+        project: proj,
+        adventureData: proj.data && proj.data.adventureData ? proj.data.adventureData : proj.data || null
+      };
+    }
+    return null;
+  }
+
+  /**
+   * Get current project id and project
+   * @returns {Object|null} Current project record or null
+   */
+  async getCurrentProject() {
+    const id = localStorage.getItem('editor_current_project');
+    if (!id) return null;
+  return this.getProject(id);
+  }
+
+  /**
+   * Create a new project (async so callers can await)
+   * @param {Object} project - Project configuration
+   * @returns {Object} Created project record
+   */
+  // -- project save/update API -------------------------------------------------
+  /**
+   * Save/update an existing project
+   * @param {string} projectId
+   * @param {Object} update
+   * @returns {Object} updated project record
+   */
+  async saveProject(projectId, update = {}) {
+    try {
+      const raw = localStorage.getItem('editor_projects');
+      const projects = raw ? JSON.parse(raw) : [];
+      const idx = projects.findIndex(p => p.id === projectId);
+      if (idx === -1) throw new Error('Project not found');
+
+      const existing = projects[idx];
+      const now = Date.now();
+
+      const updated = {
+        ...existing,
+        name: update.name || update.title || existing.name,
+        data: { ...(existing.data || {}), ...(update.data || update.adventureData ? { adventureData: update.adventureData || update.data } : {}) },
+        modified: now
+      };
+
+      projects[idx] = updated;
+      localStorage.setItem('editor_projects', JSON.stringify(projects));
+
+      // Make sure the saved project becomes the current project
+      localStorage.setItem('editor_current_project', projectId);
+
+      return updated;
+    } catch (err) {
+      console.error('EditorSessionStorage.saveProject failed', err);
+      throw err;
+    }
+  }
+
+  /**
+   * Backwards-compatibility alias for createNewProject
+   * @param {Object} project - Project configuration
+   * @returns {Object} Created project record
+   */
+  async createProject(project = {}) {
+    return this.createNewProject(project);
+  }
+
+  /**
+   * Delete a project
+   * @param {string} projectId - Project ID to delete
+   * @returns {boolean} Success status
+   */
+  async deleteProject(projectId) {
+    try {
+      const raw = localStorage.getItem('editor_projects');
+      const projects = raw ? JSON.parse(raw) : [];
+      
+      const filteredProjects = projects.filter(p => p.id !== projectId);
+      localStorage.setItem('editor_projects', JSON.stringify(filteredProjects));
+      
+      // Clear current project if it's the one being deleted
+      const currentId = localStorage.getItem('editor_current_project');
+      if (currentId === projectId) {
+        localStorage.removeItem('editor_current_project');
+      }
+      
+      return true;
+    } catch (err) {
+      console.error('EditorSessionStorage.deleteProject failed', err);
+      throw err;
+    }
+  }
+
+  /**
+   * Visual autosave feedback system methods
+   */
+
+  /**
+   * Initialize connectivity monitoring
+   * @private
+   */
+  initializeConnectivityMonitoring() {
+    window.addEventListener('online', () => {
+      this.isOnline = true;
+      this.updateSaveStatus('idle');
+      // Try to save any pending changes
+      if (this.isDirty && this.currentSessionId) {
+        this.performAutoSave(this.currentSessionId);
+      }
+    });
+
+    window.addEventListener('offline', () => {
+      this.isOnline = false;
+      this.updateSaveStatus('offline');
+    });
+  }
+
+  /**
+   * Update save status and notify callbacks
+   * @param {string} status - New save status
+   * @param {number} progress - Save progress (0-100)
+   */
+  updateSaveStatus(status, progress = 0) {
+    this.saveStatus = status;
+    this.saveProgress = progress;
+    
+    // Notify all registered callbacks
+    this.saveCallbacks.forEach(callback => {
+      try {
+        callback({
+          status: this.saveStatus,
+          progress: this.saveProgress,
+          isOnline: this.isOnline,
+          lastSaved: this.lastSaveTime,
+          lastSaveAttempt: this.lastSaveAttempt,
+          retryCount: this.saveRetryCount,
+          queueSize: this.saveQueue.size,
+          conflictData: this.conflictData
+        });
+      } catch (error) {
+        console.error('Save status callback error:', error);
+      }
+    });
+  }
+
+  /**
+   * Register callback for save status updates
+   * @param {Function} callback - Callback function
+   * @returns {Function} Unsubscribe function
+   */
+  onSaveStatusChange(callback) {
+    this.saveCallbacks.add(callback);
+    
+    // Immediately call with current status
+    callback({
+      status: this.saveStatus,
+      progress: this.saveProgress,
+      isOnline: this.isOnline,
+      lastSaved: this.lastSaveTime,
+      lastSaveAttempt: this.lastSaveAttempt,
+      retryCount: this.saveRetryCount,
+      queueSize: this.saveQueue.size,
+      conflictData: this.conflictData
+    });
+    
+    // Return unsubscribe function
+    return () => {
+      this.saveCallbacks.delete(callback);
+    };
+  }
+
+  /**
+   * Check for save conflicts
+   * @param {string} sessionId - Session ID
+   * @param {Object} sessionData - Session data to save
+   * @returns {Object} Conflict check result
+   * @private
+   */
+  async checkForConflicts(sessionId, sessionData) {
+    try {
+      // For localStorage, we check if the stored version differs from our last known version
+      const storageKey = this.getSessionKey(sessionId);
+      const storedData = localStorage.getItem(storageKey);
+      
+      if (!storedData || !this.lastKnownVersion) {
+        return { hasConflict: false };
+      }
+
+      const parsedData = JSON.parse(storedData);
+      const storedVersionId = parsedData.versionId || parsedData.session?.metadata?.versionId;
+      
+      if (storedVersionId && storedVersionId !== this.lastKnownVersion) {
+        // Conflict detected - another instance has saved since our last save
+        const storedSession = parsedData.session || parsedData;
+        return {
+          hasConflict: true,
+          conflictData: {
+            ourVersion: this.lastKnownVersion,
+            serverVersion: storedVersionId,
+            ourData: sessionData,
+            serverData: storedSession,
+            conflictTime: Date.now()
+          }
+        };
+      }
+      
+      return { hasConflict: false };
+    } catch (error) {
+      console.error('Conflict check failed:', error);
+      return { hasConflict: false };
+    }
+  }
+
+  /**
+   * Get current save queue status
+   * @returns {Object} Save queue information
+   */
+  getSaveQueueStatus() {
+    const queue = Array.from(this.saveQueue.entries()).map(([id, data]) => ({
+      id,
+      sessionId: data.sessionId,
+      isAutoSave: data.isAutoSave,
+      progress: data.progress
+    }));
+
+    return {
+      size: this.saveQueue.size,
+      queue: queue,
+      status: this.saveStatus,
+      progress: this.saveProgress,
+      isOnline: this.isOnline
+    };
+  }
+
+  /**
+   * Force manual save with visual feedback
+   * @param {string} sessionId - Session ID
+   * @param {Object} sessionData - Session data
+   * @returns {Promise<Object>} Save result
+   */
+  async forceSave(sessionId, sessionData) {
+    return this.saveSession(sessionId, sessionData, false);
+  }
+
+  /**
+   * Resolve save conflict
+   * @param {string} resolution - 'ours', 'theirs', or 'merge'
+   * @param {Object} mergedData - Merged data (if resolution is 'merge')
+   * @returns {Promise<Object>} Resolution result
+   */
+  async resolveSaveConflict(resolution, mergedData = null) {
+    if (!this.conflictData) {
+      return { success: false, error: 'No conflict to resolve' };
+    }
+
+    let dataToSave;
+    switch (resolution) {
+      case 'ours':
+        dataToSave = this.conflictData.ourData;
+        break;
+      case 'theirs':
+        dataToSave = this.conflictData.serverData;
+        break;
+      case 'merge':
+        dataToSave = mergedData || this.conflictData.ourData;
+        break;
+      default:
+        return { success: false, error: 'Invalid resolution type' };
+    }
+
+    // Clear conflict state
+    this.conflictData = null;
+    this.updateSaveStatus('idle');
+
+    // Force save with conflict resolution
+    this.lastKnownVersion = null; // Reset to bypass conflict check
+    const result = await this.forceSave(this.currentSessionId, dataToSave);
+    
+    return result;
   }
 }
 

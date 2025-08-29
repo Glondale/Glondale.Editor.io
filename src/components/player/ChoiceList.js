@@ -1,7 +1,146 @@
 // ChoiceList.js - Enhanced with Phase 3 advanced choice features
 import { Button } from '../common/Button.js';
 
-import React, { createElement, useState, useEffect } from "https://esm.sh/react@18";
+import React, { createElement, useState, useEffect, useRef, useMemo, useCallback, memo } from "https://esm.sh/react@18";
+
+// Enhanced virtual scrolling hook with performance optimizations for 100+ choices
+function useVirtualScrolling(items, itemHeight = 80, containerHeight = 400, buffer = 8) {
+  const [scrollTop, setScrollTop] = useState(0);
+  const [isScrolling, setIsScrolling] = useState(false);
+  const containerRef = useRef(null);
+  const scrollTimeoutRef = useRef(null);
+  const lastScrollTime = useRef(0);
+  const scrollCache = useRef(new Map());
+  
+  // Throttled scroll handler for better performance
+  const handleScroll = useCallback((event) => {
+    const now = performance.now();
+    const newScrollTop = event.target.scrollTop;
+    
+    // Throttle scroll updates to 60fps
+    if (now - lastScrollTime.current < 16) return;
+    
+    lastScrollTime.current = now;
+    setScrollTop(newScrollTop);
+    
+    if (!isScrolling) {
+      setIsScrolling(true);
+    }
+    
+    // Clear existing timeout
+    if (scrollTimeoutRef.current) {
+      clearTimeout(scrollTimeoutRef.current);
+    }
+    
+    // Set scrolling to false after scroll ends
+    scrollTimeoutRef.current = setTimeout(() => {
+      setIsScrolling(false);
+    }, 150);
+  }, [isScrolling]);
+  
+  // Calculate visible range with enhanced buffer for smoother scrolling
+  const visibleRange = useMemo(() => {
+    const cacheKey = `${scrollTop}-${itemHeight}-${containerHeight}-${buffer}-${items.length}`;
+    
+    if (scrollCache.current.has(cacheKey)) {
+      return scrollCache.current.get(cacheKey);
+    }
+    
+    const startIndex = Math.max(0, Math.floor(scrollTop / itemHeight) - buffer);
+    const endIndex = Math.min(
+      items.length - 1,
+      Math.ceil((scrollTop + containerHeight) / itemHeight) + buffer
+    );
+    
+    const range = { startIndex, endIndex };
+    
+    // Cache the result for performance
+    scrollCache.current.set(cacheKey, range);
+    
+    // Limit cache size
+    if (scrollCache.current.size > 50) {
+      const firstKey = scrollCache.current.keys().next().value;
+      scrollCache.current.delete(firstKey);
+    }
+    
+    return range;
+  }, [scrollTop, itemHeight, containerHeight, buffer, items.length]);
+  
+  // Visible items with optimized slicing
+  const visibleItems = useMemo(() => {
+    const { startIndex, endIndex } = visibleRange;
+    const sliceCount = endIndex - startIndex + 1;
+    
+    if (sliceCount <= 0) return [];
+    
+    return items.slice(startIndex, endIndex + 1)
+      .map((item, index) => ({
+        ...item,
+        virtualIndex: startIndex + index,
+        absoluteIndex: startIndex + index,
+        isVisible: true
+      }));
+  }, [items, visibleRange]);
+  
+  // Enhanced container props with performance optimizations
+  const containerProps = {
+    ref: containerRef,
+    onScroll: handleScroll,
+    style: {
+      height: containerHeight,
+      overflowY: 'auto',
+      overflowX: 'hidden',
+      // Use transform3d to enable hardware acceleration
+      transform: 'translateZ(0)',
+      willChange: isScrolling ? 'scroll-position' : 'auto'
+    },
+    className: 'virtual-scroll-container'
+  };
+  
+  // Total height calculation with caching
+  const totalHeight = useMemo(() => {
+    return items.length * itemHeight;
+  }, [items.length, itemHeight]);
+  
+  // Offset for visible items positioning
+  const offsetY = useMemo(() => {
+    return visibleRange.startIndex * itemHeight;
+  }, [visibleRange.startIndex, itemHeight]);
+  
+  // Performance metrics
+  const performanceStats = useMemo(() => {
+    return {
+      totalItems: items.length,
+      visibleItems: visibleItems.length,
+      renderRatio: items.length > 0 ? Math.round((visibleItems.length / items.length) * 100) : 0,
+      isVirtualized: items.length > 10,
+      bufferSize: buffer,
+      scrollPosition: scrollTop,
+      isScrolling
+    };
+  }, [items.length, visibleItems.length, buffer, scrollTop, isScrolling]);
+  
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (scrollTimeoutRef.current) {
+        clearTimeout(scrollTimeoutRef.current);
+      }
+      scrollCache.current.clear();
+    };
+  }, []);
+  
+  return {
+    visibleItems,
+    containerProps,
+    totalHeight,
+    offsetY,
+    itemHeight,
+    visibleRange,
+    isScrolling,
+    performanceStats
+  };
+}
 
 export function ChoiceList({ 
   choices, 
@@ -9,7 +148,8 @@ export function ChoiceList({
   disabled = false, 
   className = '',
   showSecrets = true,
-  animateNewSecrets = true
+  animateNewSecrets = true,
+  virtualScrollThreshold = 20 // Enable virtual scrolling when choices exceed this number
 }) {
   const [newlyDiscovered, setNewlyDiscovered] = useState(new Set());
   const [animatingChoices, setAnimatingChoices] = useState(new Set());
@@ -75,11 +215,72 @@ export function ChoiceList({
   });
 
   // Group choices by priority for better organization
-  const sortedChoices = visibleChoices.sort((a, b) => {
-    const priorityA = a.priority || 0;
-    const priorityB = b.priority || 0;
-    return priorityB - priorityA; // Higher priority first
-  });
+  const sortedChoices = useMemo(() => {
+    return visibleChoices.sort((a, b) => {
+      const priorityA = a.priority || 0;
+      const priorityB = b.priority || 0;
+      return priorityB - priorityA; // Higher priority first
+    });
+  }, [visibleChoices]);
+
+  // Enhanced virtual scrolling with adaptive settings
+  const useVirtual = sortedChoices.length > virtualScrollThreshold;
+  const dynamicItemHeight = useMemo(() => {
+    // Adapt item height based on content
+    const hasComplexChoices = sortedChoices.some(c => 
+      (c.consequences && c.consequences.length > 0) || 
+      (c.evaluation?.lockReasons && c.evaluation.lockReasons.length > 0)
+    );
+    return hasComplexChoices ? 100 : 80;
+  }, [sortedChoices]);
+  
+  const adaptiveContainerHeight = useMemo(() => {
+    const screenHeight = typeof window !== 'undefined' ? window.innerHeight : 800;
+    const maxHeight = Math.min(500, screenHeight * 0.7); // Max 500px or 70% of screen
+    const minHeight = 200; // Minimum height
+    
+    if (sortedChoices.length < 3) {
+      return Math.max(minHeight, sortedChoices.length * dynamicItemHeight + 40);
+    }
+    
+    return maxHeight;
+  }, [sortedChoices.length, dynamicItemHeight]);
+  
+  const virtualScroll = useVirtualScrolling(
+    sortedChoices,
+    dynamicItemHeight,
+    adaptiveContainerHeight,
+    Math.max(5, Math.ceil(sortedChoices.length * 0.1)) // Adaptive buffer: 10% of items or min 5
+  );
+
+  // Render choice items (either all or just visible ones for virtual scrolling)
+  const renderChoiceItems = useCallback((choicesToRender, startIndex = 0) => {
+    return choicesToRender.map((choice, index) => {
+      const actualIndex = startIndex + index;
+      return createElement(ChoiceButton, {
+        key: choice.id,
+        choice,
+        index: actualIndex + 1,
+        onSelect: () => onChoiceSelect(choice.id),
+        disabled: disabled || choice.evaluation?.state === 'LOCKED',
+        isAnimating: animatingChoices.has(choice.id),
+        isNewlyDiscovered: newlyDiscovered.has(choice.id),
+        // Enhanced virtual styling with performance optimizations
+        style: useVirtual ? {
+          position: 'absolute',
+          top: (choice.virtualIndex || actualIndex) * virtualScroll.itemHeight,
+          width: '100%',
+          minHeight: virtualScroll.itemHeight,
+          maxHeight: virtualScroll.itemHeight * 1.5, // Allow slight overflow for complex content
+          boxSizing: 'border-box',
+          // Performance optimizations
+          transform: 'translateZ(0)', // Enable hardware acceleration
+          willChange: virtualScroll.isScrolling ? 'transform' : 'auto',
+          contain: 'layout style paint' // CSS containment for better performance
+        } : undefined
+      });
+    });
+  }, [onChoiceSelect, disabled, animatingChoices, newlyDiscovered, useVirtual, virtualScroll.itemHeight]);
 
   return createElement('div', {
     className: `space-y-3 ${className}`
@@ -89,27 +290,79 @@ export function ChoiceList({
       className: 'text-lg font-semibold text-gray-800 mb-3 flex items-center justify-between'
     }, [
       createElement('span', { key: 'text' }, 'What do you do?'),
-      // Show secret indicator if there are secrets
-      visibleChoices.some(c => c.isSecret) && createElement('span', {
-        key: 'secret-indicator',
-        className: 'text-xs px-2 py-1 bg-purple-600 text-white rounded-full'
-      }, '✨ Secrets')
+      // Show choice count and secret indicator
+      createElement('div', { 
+        key: 'indicators',
+        className: 'flex items-center space-x-2'
+      }, [
+        // Choice count
+        sortedChoices.length > 5 && createElement('span', {
+          key: 'count',
+          className: 'text-xs px-2 py-1 bg-gray-200 text-gray-700 rounded-full'
+        }, `${sortedChoices.length} choices`),
+        
+        // Secret indicator
+        visibleChoices.some(c => c.isSecret) && createElement('span', {
+          key: 'secret-indicator',
+          className: 'text-xs px-2 py-1 bg-purple-600 text-white rounded-full'
+        }, '✨ Secrets'),
+        
+        // Enhanced virtual scrolling indicator with performance stats
+        useVirtual && createElement('div', {
+          key: 'virtual-indicators',
+          className: 'flex space-x-1'
+        }, [
+          createElement('span', {
+            key: 'virtual-indicator',
+            className: 'text-xs px-2 py-1 bg-blue-600 text-white rounded-full',
+            title: `Showing ${virtualScroll.visibleItems.length} of ${sortedChoices.length} choices`
+          }, `📜 ${virtualScroll.performanceStats.renderRatio}%`),
+          
+          // Performance indicator for development
+          (typeof window !== 'undefined' && window.location.hostname === 'localhost') &&
+          virtualScroll.isScrolling && createElement('span', {
+            key: 'scroll-indicator',
+            className: 'text-xs px-2 py-1 bg-green-600 text-white rounded-full animate-pulse'
+          }, '⚡')
+        ])
+      ])
     ]),
     
+    // Enhanced choice container with performance optimizations
     createElement('div', {
       key: 'choices',
-      className: 'space-y-2'
-    }, sortedChoices.map((choice, index) => 
-      createElement(ChoiceButton, {
-        key: choice.id,
-        choice,
-        index: index + 1,
-        onSelect: () => onChoiceSelect(choice.id),
-        disabled: disabled || choice.evaluation?.state === 'LOCKED',
-        isAnimating: animatingChoices.has(choice.id),
-        isNewlyDiscovered: newlyDiscovered.has(choice.id)
-      })
-    )),
+      className: useVirtual ? 'virtual-scroll-wrapper' : 'space-y-2',
+      ...(useVirtual ? virtualScroll.containerProps : {}),
+      'data-choices-count': sortedChoices.length,
+      'data-virtual': useVirtual
+    }, useVirtual ? [
+      // Virtual scrolling: optimized container with total height and positioning
+      createElement('div', {
+        key: 'virtual-container',
+        className: 'relative',
+        style: {
+          height: virtualScroll.totalHeight,
+          contain: 'layout style paint', // CSS containment
+          // Use transform instead of paddingTop for better performance
+          transform: `translateY(${virtualScroll.offsetY}px)`,
+          willChange: virtualScroll.isScrolling ? 'transform' : 'auto'
+        }
+      }, renderChoiceItems(virtualScroll.visibleItems, virtualScroll.visibleRange.startIndex)),
+      
+      // Performance debug info (development only)
+      (typeof window !== 'undefined' && window.location.hostname === 'localhost') &&
+      createElement('div', {
+        key: 'debug-info',
+        className: 'absolute bottom-2 right-2 bg-black bg-opacity-75 text-white text-xs p-1 rounded font-mono',
+        style: { fontSize: '10px', zIndex: 10 }
+      }, `V:${virtualScroll.visibleItems.length}/${sortedChoices.length} S:${Math.round(virtualScroll.performanceStats.scrollPosition)}`)
+    ] : [
+      // Regular scrolling: render all choices with optimized spacing
+      createElement('div', {
+        key: 'choice-list',
+        className: 'space-y-2'
+      }, renderChoiceItems(sortedChoices))
+    ]),
     
     // Show help text if there are locked or secret choices
     visibleChoices.some(c => c.evaluation?.state === 'LOCKED' || c.isSecret) && createElement('div', {
@@ -136,7 +389,7 @@ export function ChoiceList({
   ]);
 }
 
-function ChoiceButton({ choice, index, onSelect, disabled, isAnimating, isNewlyDiscovered }) {
+const ChoiceButton = memo(function ChoiceButton({ choice, index, onSelect, disabled, isAnimating, isNewlyDiscovered, style }) {
   const evaluation = choice.evaluation || { state: 'VISIBLE' };
   const isLocked = evaluation.state === 'LOCKED';
   const isSecret = choice.isSecret;
@@ -202,7 +455,8 @@ function ChoiceButton({ choice, index, onSelect, disabled, isAnimating, isNewlyD
   };
 
   return createElement('div', {
-    className: 'w-full relative'
+    className: 'w-full relative',
+    style: style // Apply virtual scrolling styles
   }, [
     // Main choice button
     createElement(Button, {
@@ -290,10 +544,10 @@ function ChoiceButton({ choice, index, onSelect, disabled, isAnimating, isNewlyD
       title: `Cooldown: ${choice.cooldown}ms`
     }, '⏱')
   ]);
-}
+});
 
 // Helper function for consequence styling
-function getConsequenceClassName(severity) {
+export function getConsequenceClassName(severity) {
   switch (severity) {
     case 'critical':
       return 'bg-red-600 text-red-100';

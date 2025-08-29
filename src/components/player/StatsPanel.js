@@ -1,7 +1,7 @@
 // StatsPanel.js - Enhanced with Phase 3 advanced features
 import { InventoryDisplay } from './InventoryDisplay.js';
 
-import React, { useState, createElement } from "https://esm.sh/react@18";
+import React, { useState, createElement, memo, useMemo } from "https://esm.sh/react@18";
 
 export function StatsPanel({ 
   stats, 
@@ -35,19 +35,21 @@ export function StatsPanel({
   };
 
   // Group stats by category
-  const statsByCategory = stats.reduce((acc, stat) => {
-    const category = stat.category || 'general';
-    if (!acc[category]) {
-      acc[category] = [];
-    }
-    acc[category].push(stat);
-    return acc;
-  }, {});
+  const statsByCategory = useMemo(() => {
+    return stats.reduce((acc, stat) => {
+      const category = stat.category || 'general';
+      if (!acc[category]) {
+        acc[category] = [];
+      }
+      acc[category].push(stat);
+      return acc;
+    }, {});
+  }, [stats]);
 
-  const categories = Object.keys(statsByCategory).sort();
+  const categories = useMemo(() => Object.keys(statsByCategory).sort(), [statsByCategory]);
 
   // Tab configuration
-  const tabs = [
+  const tabs = useMemo(() => [
     { id: 'stats', label: 'Stats', icon: '📊', count: stats.length },
     showInventory && inventory.length > 0 && { 
       id: 'inventory', 
@@ -73,7 +75,7 @@ export function StatsPanel({
       icon: '📈', 
       count: null 
     }
-  ].filter(Boolean);
+  ].filter(Boolean), [stats.length, showInventory, inventory, showAchievements, achievements.length, showSecrets, secretsDiscovered.length, showAnalytics]);
 
   return createElement('div', {
     className: `bg-gray-50 border rounded-lg overflow-hidden ${className}`
@@ -242,7 +244,7 @@ export function StatsPanel({
   ]);
 }
 
-function StatItem({ stat }) {
+const StatItem = memo(function StatItem({ stat }) {
   const renderStatValue = () => {
     // Use displayValue if available (from custom stat types)
     const displayValue = stat.displayValue || stat.value;
@@ -330,9 +332,9 @@ function StatItem({ stat }) {
       className: 'flex items-center'
     }, renderStatValue())
   ]);
-}
+});
 
-function AchievementItem({ achievement }) {
+const AchievementItem = memo(function AchievementItem({ achievement }) {
   const isComplete = achievement.progress >= 1.0;
   
   return createElement('div', {
@@ -367,9 +369,9 @@ function AchievementItem({ achievement }) {
       style: { width: `${(achievement.progress * 100)}%` }
     }))
   ]);
-}
+});
 
-function SecretItem({ secret, index }) {
+const SecretItem = memo(function SecretItem({ secret, index }) {
   const timeAgo = new Date(secret.timestamp).toLocaleString();
   
   return createElement('div', {
@@ -397,17 +399,17 @@ function SecretItem({ secret, index }) {
       className: 'text-xs text-purple-600'
     }, `Discovered ${timeAgo}`)
   ]);
-}
+});
 
-function AnalyticsSection({ metrics, achievements, secrets, visitedScenes }) {
-  const analyticsData = [
+const AnalyticsSection = memo(function AnalyticsSection({ metrics, achievements, secrets, visitedScenes }) {
+  const analyticsData = useMemo(() => [
     { label: 'Choices Made', value: metrics.totalChoicesMade || 0, icon: '🎯' },
     { label: 'Scenes Visited', value: visitedScenes || 0, icon: '🗺️' },
     { label: 'Secrets Found', value: secrets.length || 0, icon: '✨' },
     { label: 'Achievements', value: achievements.length || 0, icon: '🏆' },
     { label: 'Completion', value: `${metrics.completionPercentage || 0}%`, icon: '📊' },
     { label: 'Avg Choices/Scene', value: (metrics.averageChoicesPerScene || 0).toFixed(1), icon: '⚖️' }
-  ];
+  ], [metrics, achievements.length, secrets.length, visitedScenes]);
 
   return createElement('div', {
     className: 'space-y-3'
@@ -439,4 +441,4 @@ function AnalyticsSection({ metrics, achievements, secrets, visitedScenes }) {
       ])
     ))
   ]);
-}
+});

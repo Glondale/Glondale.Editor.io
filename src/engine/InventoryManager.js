@@ -32,6 +32,15 @@ export class InventoryManager {
   }
 
   /**
+   * Compatibility: initialize inventory from adventure definitions
+   */
+  initializeInventory(itemDefinitions = []) {
+    this.loadItemDefinitions(itemDefinitions);
+    // Initialize empty inventory entries for defined items if desired
+    // Keep inventory empty by default; UI or story can add items via actions
+  }
+
+  /**
    * Load item definitions from adventure data
    * @param {Array} itemDefinitions - Array of item definition objects
    */
@@ -388,6 +397,46 @@ export class InventoryManager {
   }
 
   /**
+   * Compatibility: return all items in a simple serializable form
+   */
+  getAllItems() {
+    const items = [];
+    this.inventory.forEach((entry, itemId) => {
+      items.push({ id: itemId, count: entry.quantity, acquiredAt: entry.acquiredAt });
+    });
+    return items;
+  }
+
+  /**
+   * Compatibility alias for older APIs
+   */
+  getAll() {
+    return this.getAllItems();
+  }
+
+  /**
+   * Compatibility: return lightweight inventoryState
+   */
+  getInventoryState() {
+    const stats = this.getStats();
+
+    // Compute total weight from current inventory entries (compatibility with validator)
+    let totalWeight = 0;
+    this.inventory.forEach(entry => {
+      const itemWeight = entry.item && typeof entry.item.weight === 'number' ? entry.item.weight : 0;
+      totalWeight += (entry.quantity || 0) * itemWeight;
+    });
+
+    return {
+      totalWeight,
+      totalItems: stats.totalItems,
+      uniqueItems: stats.uniqueItems,
+      totalValue: stats.totalValue,
+      lastModified: Date.now()
+    };
+  }
+
+  /**
    * Get most valuable items
    * @param {number} limit - Maximum items to return
    * @returns {Array}
@@ -494,6 +543,24 @@ export class InventoryManager {
         lastUpdate: Date.now()
       }
     };
+  }
+
+  /**
+   * Return inventory in an exportable format for cross-game export
+   * Backwards-compatible name expected by StoryEngine.generateExportableData()
+   * @returns {Array} Array of exportable item objects
+   */
+  getExportableInventory() {
+    const exportItems = [];
+    this.inventory.forEach((entry, itemId) => {
+      exportItems.push({
+        id: itemId,
+        name: entry.item?.name || itemId,
+        count: entry.quantity,
+        acquiredAt: entry.acquiredAt
+      });
+    });
+    return exportItems;
   }
 
   /**

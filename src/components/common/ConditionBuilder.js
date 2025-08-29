@@ -1,5 +1,5 @@
  
-import React, { useState, useCallback } from "https://esm.sh/react@18";
+import React, { useState, useCallback, useMemo } from "https://esm.sh/react@18";
 
 /**
  * ConditionBuilder.js - Visual condition creation component
@@ -533,11 +533,11 @@ function ConditionItem({
 }
 
 // Helper functions
-function generateConditionId() {
+export function generateConditionId() {
   return 'condition_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5);
 }
 
-function formatConditionPreview(condition) {
+export function formatConditionPreview(condition) {
   const operatorLabels = {
     'eq': '=',
     'ne': '≠',

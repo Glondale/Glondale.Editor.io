@@ -2,6 +2,7 @@
 import { validateSaveData } from '../utils/validation.js';
 import { CrossGameSaveSystem } from './CrossGameSaveSystem.js';
 import { ExportableDataManager } from './ExportableDataManager.js';
+import { logError, logWarning, logInfo } from '../utils/errorLogger.js';
 
 export class SaveSystem {
   static SAVE_PREFIX = 'adventure_save_';
@@ -105,41 +106,107 @@ export class SaveSystem {
     };
   }
 
-  // Enhanced save game with Phase 3 features
+  // Enhanced save game with Phase 3 features and comprehensive error handling
   async saveGame(name) {
+    const startTime = Date.now();
+    const context = { name, operation: 'save' };
+    
     try {
-      const saveData = this.createSaveData(name);
-      const saveId = this.generateSaveId();
+      logInfo('Starting save operation', context);
+      
+      // Step 1: Create save data with validation
+      const saveData = await this.createSaveDataSafely(name);
+
+      // Allow overwriting existing saves by name: if a save with the same name exists
+      // reuse its ID so the new save overwrites the old one.
+      let saveId = this.generateSaveId();
+      try {
+        const listJson = localStorage.getItem(SaveSystem.SAVE_LIST_KEY) || '[]';
+        const savesList = JSON.parse(listJson);
+        const existing = savesList.find(s => s.name === name);
+        if (existing && existing.id) {
+          saveId = existing.id; // overwrite
+          logInfo('Overwriting existing save by name', { ...context, saveId });
+        }
+      } catch (e) {
+        // ignore parsing errors and continue with new id
+      }
+      
+      // Step 2: Create backup if existing save exists
+      await this.createBackupIfExists(saveId, context);
+      
+      // Step 3: Create save slot with checksums
       const saveSlot = {
         id: saveId,
         name,
         data: saveData,
         created: Date.now(),
-        modified: Date.now()
+        modified: Date.now(),
+        checksum: this.calculateChecksum(saveData),
+        version: '2.0'
       };
 
-      // Validate save data before saving
-      if (!validateSaveData(saveData)) {
-        throw new Error('Generated save data is invalid');
+      // Step 4: Validate save slot integrity
+      const validation = await this.validateSaveSlot(saveSlot);
+      if (!validation.isValid) {
+        throw new Error(`Save validation failed: ${validation.errors.join(', ')}`);
       }
 
-      // Save the data
-      localStorage.setItem(
-        SaveSystem.SAVE_PREFIX + saveId, 
-        JSON.stringify(saveSlot)
-      );
+      // Step 5: Atomic save operation with retry logic
+      await this.atomicSave(saveId, saveSlot, context);
 
-      // Update saves list
-      this.updateSavesList(saveId, name, saveData);
+      // Step 6: Update saves list with error recovery
+      await this.updateSavesListSafely(saveId, name, saveData);
 
-      // Generate and save exportable data for cross-game compatibility
-      await this.generateExportableDataFile(saveId, saveData);
+      // Step 7: Generate exportable data (non-blocking)
+      this.generateExportableDataFile(saveId, saveData).catch(error => {
+        logWarning('Failed to generate exportable data', { saveId, error: error.message });
+      });
 
-      console.log('SaveSystem: Game saved successfully:', saveId);
+      const elapsed = Date.now() - startTime;
+      logInfo('Save operation completed successfully', { ...context, saveId, elapsed });
+      
       return saveId;
+      
     } catch (error) {
-      console.error('SaveSystem: Failed to save game:', error);
-      throw new Error(`Failed to save game: ${error.message}`);
+      const elapsed = Date.now() - startTime;
+      const errorId = logError({
+        type: 'save_failure',
+        message: `Failed to save game: ${error.message}`,
+        error: error,
+        stack: error.stack
+      }, { ...context, elapsed });
+      
+      throw new Error(`Save operation failed [${errorId}]: ${error.message}`);
+    }
+  }
+
+  // Create save data with validation and fallback handling
+  async createSaveDataSafely(name) {
+    try {
+      const saveData = this.createSaveData(name);
+      
+      // Additional integrity checks
+      if (!saveData.adventureId || !saveData.currentSceneId) {
+        throw new Error('Critical save data fields missing');
+      }
+      
+      // Validate data size (prevent localStorage overflow)
+      const dataSize = JSON.stringify(saveData).length;
+      if (dataSize > 5000000) { // 5MB limit
+        logWarning('Save data is very large, attempting compression', { size: dataSize });
+        // Could implement compression here if needed
+      }
+      
+      return saveData;
+      
+    } catch (error) {
+      logError({
+        type: 'save_data_creation_failure',
+        message: `Failed to create save data: ${error.message}`,
+        error: error
+      }, { name });
+      throw error;
     }
   }
 
@@ -450,5 +517,500 @@ export class SaveSystem {
       console.error('SaveSystem: Failed to cleanup old saves:', error);
       return 0;
     }
+  }
+
+  // === Error Handling and Corruption Recovery Methods ===
+
+  // Calculate checksum for data integrity verification
+  calculateChecksum(data) {
+    const str = JSON.stringify(data, Object.keys(data).sort());
+    let hash = 0;
+    if (str.length === 0) return hash;
+    
+    for (let i = 0; i < str.length; i++) {
+      const char = str.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash; // Convert to 32bit integer
+    }
+    
+    return hash.toString();
+  }
+
+  // Validate save slot integrity with comprehensive checks
+  async validateSaveSlot(saveSlot) {
+    const errors = [];
+    const warnings = [];
+
+    try {
+      // Basic structure validation
+      if (!saveSlot.id || !saveSlot.name || !saveSlot.data) {
+        errors.push('Missing required save slot fields');
+      }
+
+      // Data validation
+      if (saveSlot.data) {
+        const basicValidation = validateSaveData(saveSlot.data);
+        if (!basicValidation) {
+          errors.push('Save data failed basic validation');
+        }
+
+        // Checksum validation
+        if (saveSlot.checksum) {
+          const calculatedChecksum = this.calculateChecksum(saveSlot.data);
+          if (calculatedChecksum !== saveSlot.checksum) {
+            errors.push('Checksum mismatch - data may be corrupted');
+          }
+        } else {
+          warnings.push('No checksum available for integrity verification');
+        }
+
+        // Size validation
+        const dataSize = JSON.stringify(saveSlot.data).length;
+        if (dataSize > 10000000) { // 10MB limit
+          errors.push('Save data is too large');
+        } else if (dataSize < 100) {
+          errors.push('Save data is suspiciously small');
+        }
+      }
+
+      return {
+        isValid: errors.length === 0,
+        errors,
+        warnings
+      };
+
+    } catch (error) {
+      logError({
+        type: 'save_validation_error',
+        message: `Save slot validation failed: ${error.message}`,
+        error: error
+      }, { saveSlotId: saveSlot?.id });
+
+      return {
+        isValid: false,
+        errors: [`Validation error: ${error.message}`],
+        warnings
+      };
+    }
+  }
+
+  // Create backup of existing save before overwriting
+  async createBackupIfExists(saveId, context) {
+    try {
+      const existingKey = SaveSystem.SAVE_PREFIX + saveId;
+      const existingSave = localStorage.getItem(existingKey);
+      
+      if (existingSave) {
+        const backupKey = `${existingKey}_backup_${Date.now()}`;
+        localStorage.setItem(backupKey, existingSave);
+        
+        logInfo('Created backup of existing save', { ...context, saveId, backupKey });
+        
+        // Cleanup old backups (keep only 3 most recent)
+        this.cleanupOldBackups(saveId);
+      }
+    } catch (error) {
+      logWarning('Failed to create save backup', { ...context, saveId, error: error.message });
+      // Don't fail the save operation if backup fails
+    }
+  }
+
+  // Atomic save operation with retry logic
+  async atomicSave(saveId, saveSlot, context, maxRetries = 3) {
+    const saveKey = SaveSystem.SAVE_PREFIX + saveId;
+    
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        // Test localStorage availability and space
+        await this.testStorageAvailability();
+        
+        // Serialize data
+        const serializedData = JSON.stringify(saveSlot);
+        
+        // Attempt save
+        localStorage.setItem(saveKey, serializedData);
+        
+        // Verify save was successful
+        const verification = localStorage.getItem(saveKey);
+        if (!verification || verification !== serializedData) {
+          throw new Error('Save verification failed - data mismatch');
+        }
+        
+        logInfo('Atomic save completed successfully', { 
+          ...context, 
+          saveId, 
+          attempt, 
+          dataSize: serializedData.length 
+        });
+        
+        return; // Success!
+        
+      } catch (error) {
+        const isLastAttempt = attempt === maxRetries;
+        const logLevel = isLastAttempt ? 'error' : 'warning';
+        
+        (logLevel === 'error' ? logError : logWarning)({
+          type: 'atomic_save_attempt_failed',
+          message: `Save attempt ${attempt}/${maxRetries} failed: ${error.message}`,
+          error: error
+        }, { ...context, saveId, attempt });
+        
+        if (isLastAttempt) {
+          throw error;
+        }
+        
+        // Wait before retry (exponential backoff)
+        await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 100));
+      }
+    }
+  }
+
+  // Test localStorage availability and free space
+  async testStorageAvailability() {
+    try {
+      const testKey = '__storage_test__';
+      const testData = 'test';
+      
+      localStorage.setItem(testKey, testData);
+      
+      if (localStorage.getItem(testKey) !== testData) {
+        throw new Error('localStorage write/read test failed');
+      }
+      
+      localStorage.removeItem(testKey);
+      
+    } catch (error) {
+      if (error.name === 'QuotaExceededError') {
+        throw new Error('localStorage is full - cannot save data');
+      }
+      throw new Error(`localStorage is not available: ${error.message}`);
+    }
+  }
+
+  // Enhanced load game with corruption recovery
+  async loadGameSafely(saveId) {
+    const startTime = Date.now();
+    const context = { saveId, operation: 'load' };
+    
+    try {
+      logInfo('Starting load operation', context);
+      
+      // Step 1: Attempt primary load
+      let saveSlot;
+      try {
+        saveSlot = await this.loadSaveSlot(saveId);
+      } catch (primaryError) {
+        logWarning('Primary load failed, attempting recovery', { 
+          ...context, 
+          primaryError: primaryError.message 
+        });
+        
+        // Step 2: Attempt recovery from backup
+        saveSlot = await this.recoverFromBackup(saveId, primaryError);
+      }
+      
+      // Step 3: Validate loaded data
+      const validation = await this.validateSaveSlot(saveSlot);
+      if (!validation.isValid) {
+        // Attempt data repair if possible
+        saveSlot = await this.repairSaveData(saveSlot, validation);
+      }
+      
+      // Step 4: Migrate save data if needed
+      const migratedData = this.migrateSaveData(saveSlot.data);
+      
+      // Step 5: Load into story engine with fallback
+      await this.loadIntoEngine(migratedData, context);
+      
+      // Step 6: Update metadata
+      await this.updateLoadMetadata(saveId, saveSlot);
+      
+      const elapsed = Date.now() - startTime;
+      logInfo('Load operation completed successfully', { ...context, elapsed });
+      
+      return migratedData;
+      
+    } catch (error) {
+      const elapsed = Date.now() - startTime;
+      const errorId = logError({
+        type: 'load_failure',
+        message: `Failed to load game: ${error.message}`,
+        error: error,
+        stack: error.stack
+      }, { ...context, elapsed });
+      
+      throw new Error(`Load operation failed [${errorId}]: ${error.message}`);
+    }
+  }
+
+  // Load save slot with error handling
+  async loadSaveSlot(saveId) {
+    const saveJson = localStorage.getItem(SaveSystem.SAVE_PREFIX + saveId);
+    if (!saveJson) {
+      throw new Error('Save file not found');
+    }
+    
+    try {
+      const saveSlot = JSON.parse(saveJson);
+      return saveSlot;
+    } catch (parseError) {
+      throw new Error(`Save file is corrupted: ${parseError.message}`);
+    }
+  }
+
+  // Recover from backup when primary save fails
+  async recoverFromBackup(saveId, primaryError) {
+    const backupPattern = `${SaveSystem.SAVE_PREFIX}${saveId}_backup_`;
+    const backupKeys = [];
+    
+    // Find all backup keys for this save
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith(backupPattern)) {
+        backupKeys.push(key);
+      }
+    }
+    
+    if (backupKeys.length === 0) {
+      throw new Error(`No backups available for recovery. Original error: ${primaryError.message}`);
+    }
+    
+    // Sort by timestamp (most recent first)
+    backupKeys.sort((a, b) => {
+      const timestampA = parseInt(a.split('_backup_')[1]);
+      const timestampB = parseInt(b.split('_backup_')[1]);
+      return timestampB - timestampA;
+    });
+    
+    // Try each backup in order
+    for (const backupKey of backupKeys) {
+      try {
+        const backupJson = localStorage.getItem(backupKey);
+        if (backupJson) {
+          const saveSlot = JSON.parse(backupJson);
+          
+          logInfo('Successfully recovered from backup', { 
+            saveId, 
+            backupKey, 
+            primaryError: primaryError.message 
+          });
+          
+          return saveSlot;
+        }
+      } catch (backupError) {
+        logWarning('Backup recovery failed, trying next backup', { 
+          saveId, 
+          backupKey, 
+          backupError: backupError.message 
+        });
+        continue;
+      }
+    }
+    
+    throw new Error(`All backup recovery attempts failed. Original error: ${primaryError.message}`);
+  }
+
+  // Repair corrupted save data
+  async repairSaveData(saveSlot, validation) {
+    logInfo('Attempting to repair corrupted save data', { 
+      saveSlotId: saveSlot.id, 
+      errors: validation.errors 
+    });
+    
+    const repairedSlot = JSON.parse(JSON.stringify(saveSlot)); // Deep clone
+    let repairsMade = 0;
+    
+    try {
+      // Repair missing critical fields
+      if (!repairedSlot.data.adventureId) {
+        repairedSlot.data.adventureId = 'recovered_adventure';
+        repairsMade++;
+      }
+      
+      if (!repairedSlot.data.currentSceneId && repairedSlot.data.visitedScenes?.length > 0) {
+        repairedSlot.data.currentSceneId = repairedSlot.data.visitedScenes[repairedSlot.data.visitedScenes.length - 1];
+        repairsMade++;
+      }
+      
+      if (!repairedSlot.data.stats) {
+        repairedSlot.data.stats = {};
+        repairsMade++;
+      }
+      
+      if (!repairedSlot.data.flags) {
+        repairedSlot.data.flags = {};
+        repairsMade++;
+      }
+      
+      if (!Array.isArray(repairedSlot.data.visitedScenes)) {
+        repairedSlot.data.visitedScenes = [];
+        repairsMade++;
+      }
+      
+      if (!Array.isArray(repairedSlot.data.choiceHistory)) {
+        repairedSlot.data.choiceHistory = [];
+        repairsMade++;
+      }
+      
+      // Recalculate checksum
+      repairedSlot.checksum = this.calculateChecksum(repairedSlot.data);
+      
+      if (repairsMade > 0) {
+        logInfo('Save data repair completed', { 
+          saveSlotId: saveSlot.id, 
+          repairsMade,
+          originalErrors: validation.errors.length 
+        });
+      }
+      
+      return repairedSlot;
+      
+    } catch (repairError) {
+      logError({
+        type: 'save_repair_failed',
+        message: `Failed to repair save data: ${repairError.message}`,
+        error: repairError
+      }, { saveSlotId: saveSlot.id });
+      
+      throw new Error(`Save data is too corrupted to repair: ${repairError.message}`);
+    }
+  }
+
+  // Load data into story engine with fallback handling
+  async loadIntoEngine(saveData, context) {
+    try {
+      this.storyEngine.loadFromSave(saveData);
+    } catch (engineError) {
+      logError({
+        type: 'engine_load_failure',
+        message: `Failed to load save into story engine: ${engineError.message}`,
+        error: engineError
+      }, context);
+      
+      throw new Error(`Cannot load save into game engine: ${engineError.message}`);
+    }
+  }
+
+  // Update load metadata
+  async updateLoadMetadata(saveId, saveSlot) {
+    try {
+      saveSlot.modified = Date.now();
+      const updatedSaveSlot = {
+        ...saveSlot,
+        lastLoaded: Date.now()
+      };
+      
+      localStorage.setItem(
+        SaveSystem.SAVE_PREFIX + saveId,
+        JSON.stringify(updatedSaveSlot)
+      );
+    } catch (error) {
+      logWarning('Failed to update load metadata', { saveId, error: error.message });
+      // Don't fail the load operation for metadata update failures
+    }
+  }
+
+  // Update saves list with error recovery
+  async updateSavesListSafely(saveId, name, saveData) {
+    try {
+      this.updateSavesList(saveId, name, saveData);
+    } catch (error) {
+      logError({
+        type: 'saves_list_update_failure',
+        message: `Failed to update saves list: ${error.message}`,
+        error: error
+      }, { saveId, name });
+      
+      // Try to recover saves list
+      await this.recoverSavesList();
+    }
+  }
+
+  // Recover corrupted saves list
+  async recoverSavesList() {
+    try {
+      logInfo('Attempting to recover saves list');
+      
+      const recoveredSaves = [];
+      const savePrefix = SaveSystem.SAVE_PREFIX;
+      
+      // Scan localStorage for save files
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith(savePrefix) && !key.includes('_backup_')) {
+          try {
+            const saveJson = localStorage.getItem(key);
+            if (saveJson) {
+              const saveSlot = JSON.parse(saveJson);
+              const saveId = key.replace(savePrefix, '');
+              
+              // Create basic save info
+              const saveInfo = {
+                id: saveId,
+                name: saveSlot.name || 'Recovered Save',
+                timestamp: saveSlot.data?.timestamp || saveSlot.created || Date.now(),
+                adventureTitle: saveSlot.data?.saveMetadata?.adventureTitle || 'Unknown Adventure',
+                currentSceneTitle: saveSlot.data?.saveMetadata?.currentSceneTitle || 'Unknown Scene'
+              };
+              
+              recoveredSaves.push(saveInfo);
+            }
+          } catch (parseError) {
+            logWarning('Failed to parse save during recovery', { key, parseError: parseError.message });
+          }
+        }
+      }
+      
+      // Sort by timestamp (newest first)
+      recoveredSaves.sort((a, b) => b.timestamp - a.timestamp);
+      
+      // Save recovered list
+      localStorage.setItem(SaveSystem.SAVE_LIST_KEY, JSON.stringify(recoveredSaves));
+      
+      logInfo('Saves list recovery completed', { recoveredCount: recoveredSaves.length });
+      
+    } catch (error) {
+      logError({
+        type: 'saves_list_recovery_failed',
+        message: `Failed to recover saves list: ${error.message}`,
+        error: error
+      });
+    }
+  }
+
+  // Cleanup old backup files
+  cleanupOldBackups(saveId) {
+    try {
+      const backupPattern = `${SaveSystem.SAVE_PREFIX}${saveId}_backup_`;
+      const backupKeys = [];
+      
+      // Find all backup keys
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith(backupPattern)) {
+          const timestamp = parseInt(key.split('_backup_')[1]);
+          backupKeys.push({ key, timestamp });
+        }
+      }
+      
+      // Keep only the 3 most recent backups
+      if (backupKeys.length > 3) {
+        backupKeys.sort((a, b) => b.timestamp - a.timestamp);
+        const toDelete = backupKeys.slice(3);
+        
+        toDelete.forEach(backup => {
+          localStorage.removeItem(backup.key);
+        });
+        
+        logInfo('Cleaned up old backups', { saveId, deletedCount: toDelete.length });
+      }
+    } catch (error) {
+      logWarning('Failed to cleanup old backups', { saveId, error: error.message });
+    }
+  }
+
+  // Replace the original loadGame method with the safe version
+  async loadGame(saveId) {
+    return await this.loadGameSafely(saveId);
   }
 }

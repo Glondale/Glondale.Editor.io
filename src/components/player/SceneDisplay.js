@@ -1,7 +1,12 @@
  
-import React, { createElement } from "https://esm.sh/react@18";
+import React, { createElement, useMemo } from "https://esm.sh/react@18";
 
 export function SceneDisplay({ scene, className = '' }) {
+  // Memoize formatted content for performance
+  const formattedContent = useMemo(() => {
+    return scene ? formatSceneContent(scene.content) : '';
+  }, [scene?.content]);
+
   if (!scene) {
     return createElement('div', {
       className: `p-6 bg-gray-100 rounded-lg ${className}`
@@ -26,14 +31,14 @@ export function SceneDisplay({ scene, className = '' }) {
     }, createElement('div', {
       className: 'text-gray-700 leading-relaxed whitespace-pre-wrap',
       dangerouslySetInnerHTML: { 
-        __html: formatSceneContent(scene.content) 
+        __html: formattedContent
       }
     }))
   ]);
 }
 
 // Helper function to format scene content
-function formatSceneContent(content) {
+export function formatSceneContent(content) {
   // Basic formatting - convert line breaks to HTML
   return content
     .replace(/\n\n/g, '</p><p>')

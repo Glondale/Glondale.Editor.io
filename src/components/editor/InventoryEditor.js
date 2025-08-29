@@ -1052,3 +1052,5 @@ function validateItem(item, existingItems = []) {
 
   return errors;
 }
+
+export default InventoryEditor;

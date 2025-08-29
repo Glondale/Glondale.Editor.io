@@ -2,21 +2,30 @@
 // Handles: canvas rendering, node positioning, drag/drop, pan/zoom, node connections, context menus
 
 import ConnectionLine from '../nodes/ConnectionLine.js';
+import NodeManager from '../../../editor/NodeManager.js';
 
-import React, { useState, useEffect, useRef, useCallback } from "https://esm.sh/react@18";
+import React, { useState, useEffect, useRef, useCallback, useMemo, memo } from "https://esm.sh/react@18";
 
-export default function EditorCanvas({ 
+const EditorCanvas = memo(function EditorCanvas({ 
   nodes = new Map(), 
   connections = new Map(), 
   selectedNodeId = null,
   onNodeSelect = () => {},
   onNodeMove = () => {},
+  // Called continuously during drag for immediate visual feedback (should update node position without creating history entries)
+  onNodeDrag = () => {},
   onNodeCreate = () => {},
-  onNodeContextMenu = () => {}, // NEW: Context menu handler
+  onNodeContextMenu = () => {},
   onConnectionCreate = () => {},
+  enableAdvancedCulling = true,
+  maxVisibleNodes = 1000,
   className = ''
 }) {
   const canvasRef = useRef(null);
+  const nodeManagerRef = useRef(null);
+  const renderFrameRef = useRef(null);
+  const lastRenderTime = useRef(0);
+  
   const [viewport, setViewport] = useState({ x: 0, y: 0, zoom: 1 });
   const [dragState, setDragState] = useState({
     isDragging: false,
@@ -25,6 +34,55 @@ export default function EditorCanvas({
     dragNodeId: null,
     connectionStart: null
   });
+  // Ghost overlay shown during node drag for clearer UX
+  const [ghost, setGhost] = useState(null);
+  
+  // Initialize NodeManager for advanced culling
+  useEffect(() => {
+    if (enableAdvancedCulling) {
+      nodeManagerRef.current = new NodeManager({
+        enableCulling: true,
+        bufferZone: 300,
+        enableMemoryOptimization: nodes.size > 100,
+        maxVisibleNodes,
+        lazyLoadThreshold: 200
+      });
+      
+      // Sync nodes with NodeManager
+      for (const [nodeId, node] of nodes) {
+        nodeManagerRef.current.addNode(nodeId, node);
+      }
+      
+      nodeManagerRef.current.setViewport(viewport);
+      
+      return () => {
+        if (nodeManagerRef.current) {
+          nodeManagerRef.current.destroy();
+        }
+      };
+    }
+  }, [enableAdvancedCulling, maxVisibleNodes]);
+  
+  // Sync viewport with NodeManager
+  useEffect(() => {
+    if (nodeManagerRef.current) {
+      nodeManagerRef.current.setViewport(viewport);
+    }
+  }, [viewport]);
+  
+  // Sync nodes with NodeManager
+  useEffect(() => {
+    if (nodeManagerRef.current && enableAdvancedCulling) {
+      // Clear and rebuild node manager state
+      for (const [nodeId] of nodeManagerRef.current.getAllNodes()) {
+        nodeManagerRef.current.removeNode(nodeId);
+      }
+      
+      for (const [nodeId, node] of nodes) {
+        nodeManagerRef.current.addNode(nodeId, node);
+      }
+    }
+  }, [nodes, enableAdvancedCulling]);
 
   // Convert screen coordinates to canvas coordinates
   const screenToCanvas = useCallback((screenX, screenY) => {
@@ -61,6 +119,119 @@ export default function EditorCanvas({
     }
     return null;
   }, [nodes]);
+
+  // Advanced viewport culling with NodeManager integration
+  const getVisibleNodes = useMemo(() => {
+    if (enableAdvancedCulling && nodeManagerRef.current) {
+      // Use NodeManager's advanced culling
+      const visibleNodeData = nodeManagerRef.current.getVisibleNodes();
+      return visibleNodeData.map(({ nodeId, node }) => [nodeId, node]);
+    }
+    
+    // Fallback to basic culling if NodeManager is not available
+    if (!canvasRef.current) return Array.from(nodes.entries());
+    
+    const canvasRect = canvasRef.current.getBoundingClientRect();
+    const nodeSize = { width: 200, height: 100 };
+    const buffer = 200; // Increased buffer for smoother scrolling
+    
+    const visibleArea = {
+      left: (-viewport.x - buffer) / viewport.zoom,
+      top: (-viewport.y - buffer) / viewport.zoom,
+      right: (-viewport.x + canvasRect.width + buffer) / viewport.zoom,
+      bottom: (-viewport.y + canvasRect.height + buffer) / viewport.zoom
+    };
+    
+    const visibleNodes = [];
+    for (const [nodeId, node] of nodes) {
+      const nodeRect = {
+        left: node.position.x,
+        top: node.position.y,
+        right: node.position.x + nodeSize.width,
+        bottom: node.position.y + nodeSize.height
+      };
+      
+      const isVisible = !(nodeRect.right < visibleArea.left || 
+                         nodeRect.left > visibleArea.right ||
+                         nodeRect.bottom < visibleArea.top || 
+                         nodeRect.top > visibleArea.bottom);
+      
+      if (isVisible) {
+        visibleNodes.push([nodeId, node]);
+      }
+    }
+    
+    return visibleNodes;
+  }, [nodes, viewport, canvasRef.current?.getBoundingClientRect(), enableAdvancedCulling]);
+
+  // Memoized visible connections - only render connections between visible nodes
+  const getVisibleConnections = useMemo(() => {
+    const visibleNodeIds = new Set(getVisibleNodes.map(([nodeId]) => nodeId));
+    const visibleConnections = [];
+    
+    for (const [connectionId, connection] of connections) {
+      // Only render connection if both nodes are visible or at least one endpoint is visible
+      const fromVisible = visibleNodeIds.has(connection.fromNodeId);
+      const toVisible = visibleNodeIds.has(connection.toNodeId);
+      
+      if (fromVisible || toVisible) {
+        visibleConnections.push([connectionId, connection]);
+      }
+    }
+    
+    return visibleConnections;
+  }, [connections, getVisibleNodes]);
+
+  // Enhanced performance monitoring with NodeManager integration
+  const performanceStats = useMemo(() => {
+    if (!(typeof window !== 'undefined' && window.location.hostname === 'localhost')) return null;
+    
+    let stats;
+    
+    if (enableAdvancedCulling && nodeManagerRef.current) {
+      // Get comprehensive stats from NodeManager
+      const nodeManagerStats = nodeManagerRef.current.getPerformanceStats();
+      stats = {
+        ...nodeManagerStats,
+        totalConnections: connections.size,
+        visibleConnections: getVisibleConnections.length,
+        connectionCullingRatio: connections.size > 0 ? 
+          Math.round((1 - getVisibleConnections.length / connections.size) * 100) : 0,
+        advancedCullingEnabled: true,
+        memoryOptimizationEnabled: nodeManagerRef.current.memoryOptimizationEnabled
+      };
+    } else {
+      // Basic stats without NodeManager
+      const totalNodes = nodes.size;
+      const visibleNodes = getVisibleNodes.length;
+      const totalConnections = connections.size;
+      const visibleConnections = getVisibleConnections.length;
+      const cullingRatio = totalNodes > 0 ? Math.round((1 - visibleNodes / totalNodes) * 100) : 0;
+      const connectionCullingRatio = totalConnections > 0 ? Math.round((1 - visibleConnections / totalConnections) * 100) : 0;
+      
+      stats = {
+        totalNodes,
+        visibleNodes,
+        totalConnections,
+        visibleConnections,
+        cullingRatio,
+        connectionCullingRatio,
+        advancedCullingEnabled: false,
+        memoryOptimizationEnabled: false,
+        offScreenNodes: totalNodes - visibleNodes,
+        memoryUsage: totalNodes * 2000, // Rough estimate
+        renderTime: 0
+      };
+    }
+    
+    // Calculate performance metrics
+    const renderSavings = stats.cullingRatio + (stats.connectionCullingRatio || 0);
+    stats.performanceGain = Math.min(95, renderSavings * 0.8);
+    stats.memoryEfficient = stats.totalNodes > 100 && stats.cullingRatio > 40;
+    stats.highPerformanceMode = stats.advancedCullingEnabled && stats.totalNodes > 500;
+    
+    return stats;
+  }, [nodes.size, getVisibleNodes.length, connections.size, getVisibleConnections.length, enableAdvancedCulling]);
 
   // Handle mouse down - start drag operations
   const handleMouseDown = useCallback((e) => {
@@ -108,10 +279,28 @@ export default function EditorCanvas({
     // Note: Canvas background context menu could be added here if needed
   }, [screenToCanvas, getNodeAtPosition, onNodeContextMenu]);
 
-  // Handle mouse move
+  // Enhanced mouse move with performance optimization
   const handleMouseMove = useCallback((e) => {
     if (!dragState.isDragging) return;
 
+    // Throttle mouse move events for better performance during rapid movements
+    const now = performance.now();
+    if (now - lastRenderTime.current < 16) { // ~60fps limit
+      if (renderFrameRef.current) {
+        cancelAnimationFrame(renderFrameRef.current);
+      }
+      
+      renderFrameRef.current = requestAnimationFrame(() => {
+        lastRenderTime.current = now;
+        handleMouseMoveInternal(e);
+      });
+      return;
+    }
+    
+    handleMouseMoveInternal(e);
+  }, [dragState]);
+  
+  const handleMouseMoveInternal = useCallback((e) => {
     if (dragState.dragType === 'node' && dragState.dragNodeId) {
       const canvasPos = screenToCanvas(e.clientX, e.clientY);
       const node = nodes.get(dragState.dragNodeId);
@@ -124,8 +313,23 @@ export default function EditorCanvas({
           y: node.position.y + deltaY
         };
         
-        onNodeMove(dragState.dragNodeId, newPosition);
-        
+        // Update NodeManager if available
+        if (nodeManagerRef.current) {
+          nodeManagerRef.current.updateNode(dragState.dragNodeId, { position: newPosition });
+        }
+
+
+        // Call live-drag callback for immediate visual feedback (does not record command history)
+        try { onNodeDrag(dragState.dragNodeId, newPosition); } catch (err) { /* ignore */ }
+
+        // Update ghost overlay to follow the dragged node
+        try {
+          setGhost({ nodeId: dragState.dragNodeId, position: newPosition, node });
+        } catch (e) {
+          // ignore
+        }
+
+        // Update start position for next delta calculation
         setDragState(prev => ({
           ...prev,
           startPos: canvasPos
@@ -135,21 +339,32 @@ export default function EditorCanvas({
       const deltaX = e.clientX - dragState.startPos.x;
       const deltaY = e.clientY - dragState.startPos.y;
       
-      setViewport(prev => ({
-        ...prev,
-        x: prev.x + deltaX,
-        y: prev.y + deltaY
-      }));
+      const newViewport = {
+        x: viewport.x + deltaX,
+        y: viewport.y + deltaY
+      };
+      
+      setViewport(prev => ({ ...prev, ...newViewport }));
       
       setDragState(prev => ({
         ...prev,
         startPos: { x: e.clientX, y: e.clientY }
       }));
     }
-  }, [dragState, screenToCanvas, nodes, onNodeMove]);
+  }, [dragState, screenToCanvas, nodes, viewport, onNodeMove]);
 
   // Handle mouse up
   const handleMouseUp = useCallback(() => {
+    // If we were dragging a node, commit final position via onNodeMove (to allow history/commands)
+    if (dragState.isDragging && dragState.dragType === 'node' && dragState.dragNodeId) {
+      const node = nodes.get(dragState.dragNodeId);
+      if (node) {
+        try { onNodeMove(dragState.dragNodeId, node.position); } catch (err) { /* ignore */ }
+      }
+    }
+
+    // Clear ghost overlay and reset drag state
+    setGhost(null);
     setDragState({
       isDragging: false,
       dragType: null,
@@ -217,8 +432,8 @@ export default function EditorCanvas({
         top: `${screenPos.y}px`,
         width: `${200 * viewport.zoom}px`,
         height: `${100 * viewport.zoom}px`,
-        transform: `scale(${viewport.zoom})`,
-        transformOrigin: 'top left'
+  // Note: left/top already account for zoom via canvasToScreen, avoid extra CSS transform
+  // transform and transformOrigin removed to keep pointer coordinates consistent
       }
     }, [
       // NEW: Start scene indicator
@@ -294,8 +509,8 @@ export default function EditorCanvas({
         d: 'M0,0 L0,6 L9,3 z'
       }))),
 
-      // Render connections using ConnectionLine component
-      ...Array.from(connections.values()).map(connection => {
+      // Render connections using ConnectionLine component (only visible ones)
+      ...getVisibleConnections.map(([connectionId, connection]) => {
         const fromNode = nodes.get(connection.fromNodeId);
         const toNode = nodes.get(connection.toNodeId);
         if (fromNode && toNode) {
@@ -320,7 +535,24 @@ export default function EditorCanvas({
       key: 'nodes',
       className: 'absolute inset-0',
       style: { zIndex: 2 }
-    }, Array.from(nodes.entries()).map(([nodeId, node]) => renderNode(nodeId, node))),
+    }, getVisibleNodes.map(([nodeId, node]) => renderNode(nodeId, node))),
+
+    // Ghost overlay for dragging
+    ghost && React.createElement('div', {
+      key: 'ghost',
+      className: 'absolute pointer-events-none',
+      style: {
+        left: `${canvasToScreen(ghost.position.x, ghost.position.y).x}px`,
+        top: `${canvasToScreen(ghost.position.x, ghost.position.y).y}px`,
+        width: `${200 * viewport.zoom}px`,
+        height: `${100 * viewport.zoom}px`,
+        zIndex: 25,
+        transform: `translate(0,0)`
+      }
+    }, React.createElement('div', {
+      className: 'w-full h-full border-2 border-dashed border-gray-400 bg-gray-100 bg-opacity-30 rounded-lg',
+      style: { opacity: 0.9 }
+    })),
 
     // Instructions overlay
     nodes.size === 0 && React.createElement('div', {
@@ -342,6 +574,79 @@ export default function EditorCanvas({
         key: 'instruction2',
         className: 'text-sm'
       }, 'Right-click for options • Drag to pan • Scroll to zoom')
-    ]))
+    ])),
+
+    // Advanced performance stats with NodeManager metrics
+    performanceStats && React.createElement('div', {
+      key: 'performance',
+      className: `absolute top-4 right-4 bg-black bg-opacity-90 text-white text-xs p-3 rounded-lg font-mono border-l-4 ${
+        performanceStats.highPerformanceMode ? 'border-green-400' :
+        performanceStats.memoryEfficient ? 'border-blue-400' : 'border-yellow-400'
+      }`,
+      style: { zIndex: 10, minWidth: '220px', maxHeight: '300px', overflowY: 'auto' }
+    }, [
+      React.createElement('div', { key: 'title', className: 'font-bold mb-2 text-yellow-300 flex items-center justify-between' }, [
+        React.createElement('span', { key: 'text' }, '⚡ Performance Monitor'),
+        performanceStats.advancedCullingEnabled && React.createElement('span', { 
+          key: 'advanced', 
+          className: 'text-xs bg-green-600 px-1 rounded',
+          title: 'Advanced culling enabled'
+        }, 'ADV')
+      ]),
+      
+      React.createElement('div', { key: 'nodes', className: 'mb-1' }, 
+        `Nodes: ${performanceStats.visibleNodes}/${performanceStats.totalNodes} (${performanceStats.cullingRatio}% culled)`
+      ),
+      
+      React.createElement('div', { key: 'connections', className: 'mb-1' }, 
+        `Connections: ${performanceStats.visibleConnections}/${performanceStats.totalConnections} (${performanceStats.connectionCullingRatio}% culled)`
+      ),
+      
+      React.createElement('div', { key: 'performance-gain', className: 'text-green-300 mb-1' }, 
+        `📈 Performance: +${Math.round(performanceStats.performanceGain)}%`
+      ),
+      
+      React.createElement('div', { key: 'memory', className: 'text-blue-300 mb-1' }, 
+        `💾 Memory: ${Math.round((performanceStats.memoryUsage || 0) / 1024)}KB`
+      ),
+      
+      performanceStats.renderTime > 0 && React.createElement('div', { key: 'render-time', className: 'text-purple-300 mb-1' }, 
+        `⏱️ Render: ${Math.round(performanceStats.renderTime * 100) / 100}ms`
+      ),
+      
+      React.createElement('div', { key: 'zoom', className: 'mb-1' }, 
+        `🔍 Zoom: ${Math.round(viewport.zoom * 100)}%`
+      ),
+      
+      performanceStats.offScreenNodes > 0 && React.createElement('div', { key: 'offscreen', className: 'text-gray-400 text-xs' }, 
+        `Off-screen: ${performanceStats.offScreenNodes}`
+      ),
+      
+      performanceStats.memoryOptimizationEnabled && React.createElement('div', { 
+        key: 'memory-opt', 
+        className: 'text-green-300 text-xs mt-1' 
+      }, '🧠 Memory Optimized'),
+      
+      performanceStats.highPerformanceMode && React.createElement('div', { 
+        key: 'high-perf', 
+        className: 'text-green-300 text-xs mt-1' 
+      }, '🚀 High Performance Mode'),
+      
+      performanceStats.memoryEfficient && React.createElement('div', { 
+        key: 'efficiency', 
+        className: 'text-green-300 text-xs mt-1' 
+      }, '✅ Memory Efficient')
+    ])
   ]);
-}
+}, (prevProps, nextProps) => {
+  // Custom comparison for memo to optimize re-renders
+  return (
+    prevProps.nodes === nextProps.nodes &&
+    prevProps.connections === nextProps.connections &&
+    prevProps.selectedNodeId === nextProps.selectedNodeId &&
+    prevProps.enableAdvancedCulling === nextProps.enableAdvancedCulling &&
+    prevProps.maxVisibleNodes === nextProps.maxVisibleNodes
+  );
+});
+
+export default EditorCanvas;

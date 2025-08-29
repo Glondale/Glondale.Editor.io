@@ -419,7 +419,7 @@ export default function SceneEditDialog({
               }, [
                 choice.targetSceneId && React.createElement('span', {
                   key: 'target'
-                }, `→ ${choice.targetSceneId}`),
+                }, `→ ${availableScenes.find(s => s.id === choice.targetSceneId)?.title || choice.targetSceneId}`),
                 choice.isSecret && React.createElement('span', {
                   key: 'secret',
                   className: 'ml-2 px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded'

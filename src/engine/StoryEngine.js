@@ -1,9 +1,10 @@
-// StoryEngine.js - Enhanced version with Phase 3 advanced features
+// StoryEngine.js - Enhanced version with Phase 3 advanced features and validation integration
 import { StatsManager } from './StatsManager.js';
 import { ConditionParser } from './ConditionParser.js';
 import { ChoiceEvaluator } from './ChoiceEvaluator.js';
 import { InventoryManager } from './InventoryManager.js';
 import { CrossGameSaveSystem } from './CrossGameSaveSystem.js';
+import { validationService } from '../services/ValidationService.js';
 
 export class StoryEngine {
   constructor() {
@@ -18,12 +19,49 @@ export class StoryEngine {
     this.choiceHistory = [];
     this.secretsDiscovered = [];
     this.secretChoicesAvailable = new Set(); // Track which secret choices are permanently unlocked
+    
+    // Validation integration
+    this.validationService = validationService;
+    this.validationEnabled = true;
+    this.lastValidationResult = null;
   }
 
-  // Load an adventure
-  loadAdventure(adventure) {
+  // Load an adventure with validation
+  async loadAdventure(adventure) {
     console.log('StoryEngine: Loading adventure:', adventure?.title);
     console.log('StoryEngine: Adventure scenes:', adventure?.scenes?.length || 0);
+    
+    // Validate adventure before loading if validation is enabled
+    if (this.validationEnabled && adventure) {
+      try {
+        const validationResult = await this.validationService.validate(adventure, {
+          scope: 'runtime',
+          enableFixes: false // Don't auto-fix during runtime
+        });
+        
+        this.lastValidationResult = validationResult;
+        
+        // Log validation results
+        if (validationResult.errors.length > 0) {
+          console.warn('StoryEngine: Adventure has validation errors:', validationResult.errors);
+        }
+        if (validationResult.warnings.length > 0) {
+          console.info('StoryEngine: Adventure has validation warnings:', validationResult.warnings);
+        }
+        
+        // Optionally reject adventures with critical errors
+        if (validationResult.severity === 'critical') {
+          console.error('StoryEngine: Cannot load adventure with critical validation errors');
+          throw new Error('Adventure has critical validation errors and cannot be loaded');
+        }
+        
+      } catch (error) {
+        console.error('StoryEngine: Adventure validation failed:', error);
+        if (this.validationEnabled) {
+          throw error;
+        }
+      }
+    }
     
     this.adventure = adventure;
     this.statsManager = new StatsManager(adventure.stats || []);
@@ -144,7 +182,9 @@ export class StoryEngine {
     console.log('StoryEngine: Processing', this.currentScene.choices.length, 'choices for scene:', this.currentScene.id);
 
     const evaluatedChoices = this.currentScene.choices.map(choice => {
-      const evaluation = this.choiceEvaluator.evaluateChoice(choice, this.visitedScenes, this.choiceHistory);
+      // Pass the set of discovered secret choice IDs as the second argument
+      const discovered = Array.from(this.secretChoicesAvailable || []);
+      const evaluation = this.choiceEvaluator.evaluateChoice(choice, discovered);
       
       // For secret choices, check if they've been discovered
       if (choice.isSecret && evaluation.state === 'VISIBLE') {
@@ -383,13 +423,93 @@ export class StoryEngine {
     return new Set(this.secretChoicesAvailable);
   }
 
+  /**
+   * Validation utility methods
+   */
+  
+  // Enable/disable runtime validation
+  setValidationEnabled(enabled) {
+    this.validationEnabled = enabled;
+  }
+  
+  // Get last validation result
+  getLastValidationResult() {
+    return this.lastValidationResult;
+  }
+  
+  // Validate current adventure state
+  async validateCurrentState() {
+    if (!this.adventure || !this.validationEnabled) return null;
+    
+    try {
+      const result = await this.validationService.validate(this.adventure, {
+        scope: 'runtime',
+        currentScene: this.currentScene?.id,
+        visitedScenes: this.visitedScenes,
+        stats: this.statsManager.getAll(),
+        inventory: this.inventoryManager.getAll()
+      });
+      
+      this.lastValidationResult = result;
+      return result;
+    } catch (error) {
+      console.error('StoryEngine: Runtime validation failed:', error);
+      return null;
+    }
+  }
+  
+  // Check if current scene has validation issues
+  validateCurrentScene() {
+    if (!this.currentScene || !this.lastValidationResult) return [];
+    
+    const sceneIssues = [];
+    
+    // Filter issues related to current scene
+    ['errors', 'warnings', 'info'].forEach(level => {
+      if (this.lastValidationResult[level]) {
+        this.lastValidationResult[level].forEach(issue => {
+          if (issue.location?.includes(this.currentScene.id)) {
+            sceneIssues.push({
+              ...issue,
+              level
+            });
+          }
+        });
+      }
+    });
+    
+    return sceneIssues;
+  }
+  
+  // Get validation health score for current state
+  getValidationHealthScore() {
+    if (!this.lastValidationResult) return null;
+    
+    return this.lastValidationResult.summary?.healthScore || 
+           this.lastValidationResult.healthScore || 
+           null;
+  }
+
   // Generate exportable data for cross-game saves
   generateExportableData() {
+    const inventoryExport = (this.inventoryManager && typeof this.inventoryManager.getExportableInventory === 'function')
+      ? this.inventoryManager.getExportableInventory()
+      : (this.inventoryManager && typeof this.inventoryManager.exportToSave === 'function')
+        ? this.inventoryManager.exportToSave()
+        : (this.inventoryManager && typeof this.inventoryManager.getAllItems === 'function')
+          ? this.inventoryManager.getAllItems()
+          : [];
+
     return {
       stats: this.statsManager.getExportableStats(),
       flags: this.statsManager.getExportableFlags(),
-      inventory: this.inventoryManager.getExportableInventory(),
+      inventory: inventoryExport,
       achievements: this.secretsDiscovered,
+      validation: {
+        lastResult: this.lastValidationResult?.summary,
+        healthScore: this.getValidationHealthScore(),
+        validationEnabled: this.validationEnabled
+      },
       metadata: {
         adventureId: this.adventure?.id,
         adventureTitle: this.adventure?.title,

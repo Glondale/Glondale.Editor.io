@@ -46,6 +46,37 @@ export class ExportableDataManager {
   }
 
   /**
+   * Backwards-compatible helper used by SaveSystem.generateExportableDataFile
+   * Older callers expect a plain object containing exportable pieces of save data.
+   * @param {Object} saveData
+   * @returns {Object} exportableData
+   */
+  generateExportData(saveData = {}) {
+    try {
+      const adventureData = saveData.saveMetadata || {
+        title: saveData.adventureId || 'unknown',
+        author: saveData.adventureAuthor || 'unknown',
+        version: saveData.adventureVersion || saveData.version || '1.0'
+      };
+
+      const processed = this.processSaveData(saveData, adventureData, { includeAnalytics: true });
+      const analytics = this.generateQuickAnalytics(saveData, adventureData);
+
+      return {
+        metadata: processed.metadata,
+        gameState: processed.gameState,
+        progress: processed.progress,
+        analytics: analytics,
+        generatedAt: Date.now(),
+        version: this.formatVersions.json
+      };
+    } catch (error) {
+      console.error('ExportableDataManager.generateExportData failed:', error);
+      return null;
+    }
+  }
+
+  /**
    * Export save data in specified format
    * @param {Object} saveData - Save data to export
    * @param {Object} adventureData - Adventure metadata
@@ -703,3 +734,5 @@ export class ExportableDataManager {
   generateAchievementAnalytics() { return {}; }
   generateComparativeAnalytics() { return {}; }
 }
+
+export default ExportableDataManager;

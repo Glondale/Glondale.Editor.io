@@ -1,4 +1,4 @@
-﻿import React from "https://esm.sh/react@18";
+import React, { useState, useMemo, useCallback, memo } from "https://esm.sh/react@18";
 
 /**
  * InventoryDisplay.js - Player inventory UI component
@@ -17,7 +17,7 @@
  * - SaveSystem: Inventory state persistence
  */
 
-export function InventoryDisplay({ 
+export const InventoryDisplay = memo(function InventoryDisplay({ 
   inventoryData = null,
   onItemUse = null,
   onItemSelect = null,
@@ -268,10 +268,10 @@ export function InventoryDisplay({
       onClose: () => setSelectedItem(null)
     })
   );
-}
+});
 
 // Individual inventory item component
-function InventoryItem({ 
+const InventoryItem = memo(function InventoryItem({ 
   item, 
   isSelected, 
   isCompact, 
@@ -371,10 +371,10 @@ function InventoryItem({
       quantity: item.quantity
     })
   );
-}
+});
 
 // Item details panel
-function ItemDetails({ item, onUse, onClose }) {
+const ItemDetails = memo(function ItemDetails({ item, onUse, onClose}) {
   return React.createElement('div', {
     className: 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50'
   },
@@ -465,10 +465,10 @@ function ItemDetails({ item, onUse, onClose }) {
       )
     )
   );
-}
+});
 
 // Item tooltip component
-function ItemTooltip({ item, quantity }) {
+const ItemTooltip = memo(function ItemTooltip({ item, quantity }) {
   return React.createElement('div', {
     className: 'absolute z-10 bg-gray-900 text-white text-sm rounded-lg p-3 shadow-lg pointer-events-none',
     style: {
@@ -510,10 +510,10 @@ function ItemTooltip({ item, quantity }) {
       }
     })
   );
-}
+});
 
 // Helper functions
-function getItemIcon(category) {
+export function getItemIcon(category) {
   const icons = {
     weapon: '⚔️',
     armor: '🛡️',
@@ -526,7 +526,7 @@ function getItemIcon(category) {
   return icons[category] || icons.misc;
 }
 
-function getRarityColor(rarity) {
+export function getRarityColor(rarity) {
   switch (rarity) {
     case 'common':
       return 'bg-gray-200';

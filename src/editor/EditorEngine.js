@@ -2,6 +2,14 @@
 // Handles: adventure editing, node management, validation coordination
 
 import { validateAdventure } from '../utils/validation.js';
+import { 
+  commandHistory, 
+  CreateNodeCommand, 
+  DeleteNodeCommand, 
+  UpdateNodeCommand, 
+  CreateConnectionCommand 
+} from './CommandSystem.js';
+import { logInfo, logWarning, logError } from '../utils/errorLogger.js';
 
 class EditorEngine {
   constructor() {
@@ -10,11 +18,16 @@ class EditorEngine {
     this.connections = new Map();
     this.selectedNode = null;
     this.clipboardNode = null;
-    this.history = [];
-    this.historyIndex = -1;
-    this.maxHistorySize = 50;
     this.isDirty = false;
     this.listeners = new Map();
+    this.commandHistory = commandHistory;
+    this.snapshots = new Map();
+    
+    // Listen to command history events
+    this.commandHistory.addListener(this.handleCommandHistoryEvent.bind(this));
+    
+    // Initialize command system
+    this.initializeCommandSystem();
   }
 
   // Event system for UI updates
@@ -40,6 +53,117 @@ class EditorEngine {
     if (callbacks) {
       callbacks.forEach(callback => callback(data));
     }
+  }
+
+  // Command system integration
+  initializeCommandSystem() {
+    // Create initial snapshot
+    this.createSnapshot('Initial state');
+    
+    logInfo('Command system initialized', {
+      maxHistorySize: this.commandHistory.maxHistorySize,
+      snapshotsEnabled: this.commandHistory.enableSnapshots
+    });
+  }
+
+  handleCommandHistoryEvent(event) {
+    this.markDirty();
+    this.emit('commandHistory', event);
+    
+    // Create snapshots periodically
+    if (event.type === 'execute' && this.commandHistory.history.length % 5 === 0) {
+      this.createSnapshot('Auto-snapshot');
+    }
+  }
+
+  // Command execution methods
+  async executeCommand(command) {
+    try {
+      await this.commandHistory.executeCommand(command);
+      this.markDirty();
+      return command;
+    } catch (error) {
+      logError('Command execution failed', { 
+        command: command.description, 
+        error: error.message 
+      });
+      throw error;
+    }
+  }
+
+  async undo() {
+    try {
+      const command = await this.commandHistory.undo();
+      this.emit('undo', { command });
+      return command;
+    } catch (error) {
+      logWarning('Undo failed', { error: error.message });
+      throw error;
+    }
+  }
+
+  async redo() {
+    try {
+      const command = await this.commandHistory.redo();
+      this.emit('redo', { command });
+      return command;
+    } catch (error) {
+      logWarning('Redo failed', { error: error.message });
+      throw error;
+    }
+  }
+
+  canUndo() {
+    return this.commandHistory.canUndo();
+  }
+
+  canRedo() {
+    return this.commandHistory.canRedo();
+  }
+
+  getUndoDescription() {
+    return this.commandHistory.getUndoDescription();
+  }
+
+  getRedoDescription() {
+    return this.commandHistory.getRedoDescription();
+  }
+
+  // State snapshot management
+  createSnapshot(description = 'Snapshot') {
+    const state = {
+      adventure: this.adventure ? { ...this.adventure } : null,
+      nodes: new Map(this.nodes),
+      connections: new Map(this.connections),
+      selectedNode: this.selectedNode,
+      timestamp: Date.now()
+    };
+    
+    const snapshotId = this.commandHistory.createSnapshot(state, description);
+    this.snapshots.set(snapshotId, state);
+    
+    return snapshotId;
+  }
+
+  restoreSnapshot(snapshotId) {
+    const snapshot = this.commandHistory.getSnapshot(snapshotId);
+    if (!snapshot) {
+      throw new Error(`Snapshot ${snapshotId} not found`);
+    }
+
+    this.adventure = snapshot.state.adventure;
+    this.nodes = new Map(snapshot.state.nodes);
+    this.connections = new Map(snapshot.state.connections);
+    this.selectedNode = snapshot.state.selectedNode;
+    
+    this.emit('snapshotRestored', { snapshotId, description: snapshot.description });
+    this.markDirty();
+  }
+
+  clearCommandHistory() {
+    this.commandHistory.clear();
+    this.snapshots.clear();
+    this.emit('historyCleared');
   }
 
   // Adventure management
@@ -102,10 +226,10 @@ class EditorEngine {
     }
   }
 
-  // Node operations
-  createNode(position, options = {}) {
+  // Node operations with command pattern
+  async createNode(position, options = {}) {
     const nodeId = this.generateNodeId();
-    const node = {
+    const nodeData = {
       id: nodeId,
       title: options.title || 'New Scene',
       content: options.content || '',
@@ -117,10 +241,15 @@ class EditorEngine {
       ...options
     };
     
-    this.saveState();
-    this.nodes.set(nodeId, node);
+    const command = new CreateNodeCommand(
+      nodeData,
+      position,
+      (node, pos) => this._addNodeInternal(node, pos),
+      (nodeId) => this._removeNodeInternal(nodeId)
+    );
+    
+    await this.executeCommand(command);
     this.selectedNode = nodeId;
-    this.markDirty();
     
     // Set as start scene if this is the first node
     if (this.nodes.size === 1 && !this.adventure.startSceneId) {
@@ -128,49 +257,96 @@ class EditorEngine {
       this.emit('adventureChanged', this.adventure);
     }
     
-    this.emit('nodesChanged', this.nodes);
-    this.emit('nodeCreated', node);
-    
-    return node;
+    return this.nodes.get(nodeId);
   }
 
-  updateNode(nodeId, updates) {
+  // Internal method for direct node addition (used by commands)
+  _addNodeInternal(nodeData, position) {
+    this.nodes.set(nodeData.id, nodeData);
+    this.emit('nodesChanged', this.nodes);
+    this.emit('nodeCreated', nodeData);
+  }
+
+  async updateNode(nodeId, updates) {
     const node = this.nodes.get(nodeId);
     if (!node) return null;
     
-    this.saveState();
-    const updatedNode = { ...node, ...updates };
+    // Import CompositeCommand if not already imported
+    const { CompositeCommand } = await import('./CommandSystem.js');
+    
+    // Create commands for each property being updated
+    const commands = [];
+    for (const [property, newValue] of Object.entries(updates)) {
+      const oldValue = node[property];
+      if (JSON.stringify(oldValue) !== JSON.stringify(newValue)) {
+        const command = new UpdateNodeCommand(
+          nodeId,
+          property,
+          oldValue,
+          newValue,
+          (id, prop, value) => this._updateNodePropertyInternal(id, prop, value)
+        );
+        commands.push(command);
+      }
+    }
+    
+    if (commands.length === 0) return node;
+    
+    // Execute as a single command or composite command
+    if (commands.length === 1) {
+      await this.executeCommand(commands[0]);
+    } else {
+      const compositeCommand = new CompositeCommand(
+        `Update ${nodeId}`,
+        commands,
+        { nodeId, type: 'node_update' }
+      );
+      await this.executeCommand(compositeCommand);
+    }
+    
+    return this.nodes.get(nodeId);
+  }
+
+  // Internal method for direct property updates (used by commands)
+  _updateNodePropertyInternal(nodeId, property, value) {
+    const node = this.nodes.get(nodeId);
+    if (!node) return;
+    
+    const updatedNode = { ...node, [property]: value };
     this.nodes.set(nodeId, updatedNode);
-    this.markDirty();
     
     // Update connections if choices changed
-    if (updates.choices) {
+    if (property === 'choices') {
       this.regenerateConnections();
       this.emit('connectionsChanged', this.connections);
     }
     
     this.emit('nodesChanged', this.nodes);
-    this.emit('nodeUpdated', { nodeId, node: updatedNode, updates });
-    
-    return updatedNode;
+    this.emit('nodeUpdated', { nodeId, node: updatedNode, updates: { [property]: value } });
   }
 
-  deleteNode(nodeId) {
+  async deleteNode(nodeId) {
     const node = this.nodes.get(nodeId);
     if (!node) return false;
     
-    this.saveState();
-    this.nodes.delete(nodeId);
-    this.markDirty();
-    
-    // Remove connections
-    const connectionsToDelete = [];
+    // Collect connections to be removed
+    const connections = [];
     for (const [connId, conn] of this.connections) {
       if (conn.fromNodeId === nodeId || conn.toNodeId === nodeId) {
-        connectionsToDelete.push(connId);
+        connections.push({ id: connId, ...conn });
       }
     }
-    connectionsToDelete.forEach(connId => this.connections.delete(connId));
+    
+    const command = new DeleteNodeCommand(
+      nodeId,
+      { ...node },
+      connections,
+      (id) => this._removeNodeInternal(id),
+      (nodeData, position) => this._addNodeInternal(nodeData, position),
+      (conns) => this._restoreConnectionsInternal(conns)
+    );
+    
+    await this.executeCommand(command);
     
     // Clear selection if deleted node was selected
     if (this.selectedNode === nodeId) {
@@ -184,11 +360,36 @@ class EditorEngine {
       this.emit('adventureChanged', this.adventure);
     }
     
+    return true;
+  }
+
+  // Internal method for direct node removal (used by commands)
+  _removeNodeInternal(nodeId) {
+    const node = this.nodes.get(nodeId);
+    if (!node) return;
+    
+    this.nodes.delete(nodeId);
+    
+    // Remove connections
+    const connectionsToDelete = [];
+    for (const [connId, conn] of this.connections) {
+      if (conn.fromNodeId === nodeId || conn.toNodeId === nodeId) {
+        connectionsToDelete.push(connId);
+      }
+    }
+    connectionsToDelete.forEach(connId => this.connections.delete(connId));
+    
     this.emit('nodesChanged', this.nodes);
     this.emit('connectionsChanged', this.connections);
     this.emit('nodeDeleted', { nodeId, node });
-    
-    return true;
+  }
+
+  // Internal method for restoring connections (used by commands)
+  _restoreConnectionsInternal(connections) {
+    for (const conn of connections) {
+      this.connections.set(conn.id, conn);
+    }
+    this.emit('connectionsChanged', this.connections);
   }
 
   cloneNode(nodeId, offset = { x: 50, y: 50 }) {
@@ -342,51 +543,22 @@ class EditorEngine {
     return JSON.stringify(adventureData, null, 2);
   }
 
-  // History management
+  // History management (now handled by command system)
+  // Legacy method kept for compatibility - now creates snapshots
   saveState() {
-    const state = {
-      nodes: new Map(this.nodes),
-      connections: new Map(this.connections),
-      adventure: { ...this.adventure },
-      selectedNode: this.selectedNode,
-      timestamp: Date.now()
-    };
-    
-    // Remove future history if we're not at the end
-    if (this.historyIndex < this.history.length - 1) {
-      this.history = this.history.slice(0, this.historyIndex + 1);
-    }
-    
-    this.history.push(state);
-    
-    // Limit history size
-    if (this.history.length > this.maxHistorySize) {
-      this.history.shift();
-    } else {
-      this.historyIndex++;
-    }
+    this.createSnapshot('Legacy save state');
   }
 
-  undo() {
-    if (this.historyIndex > 0) {
-      this.historyIndex--;
-      this.restoreState(this.history[this.historyIndex]);
-      this.markDirty();
-      return true;
-    }
-    return false;
+  // Legacy undo/redo methods - now delegate to command system
+  async legacyUndo() {
+    return await this.undo();
   }
 
-  redo() {
-    if (this.historyIndex < this.history.length - 1) {
-      this.historyIndex++;
-      this.restoreState(this.history[this.historyIndex]);
-      this.markDirty();
-      return true;
-    }
-    return false;
+  async legacyRedo() {
+    return await this.redo();
   }
 
+  // Legacy restore state - now handled by snapshot system
   restoreState(state) {
     this.nodes = new Map(state.nodes);
     this.connections = new Map(state.connections);
@@ -399,9 +571,9 @@ class EditorEngine {
     this.emit('selectionChanged', this.selectedNode);
   }
 
+  // Legacy clear history - now delegates to command system
   clearHistory() {
-    this.history = [];
-    this.historyIndex = -1;
+    this.clearCommandHistory();
   }
 
   // Utility methods

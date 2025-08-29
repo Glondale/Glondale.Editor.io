@@ -1,14 +1,152 @@
-// ConditionParser.js - Enhanced version with Phase 3 advanced features
+// ConditionParser.js - Enhanced version with Phase 3 advanced features and caching
 export class ConditionParser {
   constructor(statsManager, visitedScenes = [], inventoryManager = null, choiceHistory = []) {
     this.statsManager = statsManager;
     this.visitedScenes = visitedScenes;
     this.inventoryManager = inventoryManager;
     this.choiceHistory = choiceHistory;
+    
+    // Performance optimization: condition evaluation cache
+    this.evaluationCache = new Map();
+    this.cacheStats = {
+      hits: 0,
+      misses: 0,
+      totalEvaluations: 0
+    };
+    
+    // Cache invalidation tracking
+    this.lastStatsVersion = this.statsManager?.getVersion?.() || 0;
+    this.lastVisitedScenesLength = visitedScenes.length;
+    this.lastInventoryVersion = this.inventoryManager?.getVersion?.() || 0;
+    this.lastChoiceHistoryLength = choiceHistory.length;
+    
+    // Performance: limit cache size to prevent memory bloat
+    this.maxCacheSize = 1000;
+    this.cacheCleanupThreshold = 800; // Start cleanup when we hit this
   }
 
-  // Evaluate a single condition
+  // Generate a cache key for a condition
+  generateCacheKey(condition) {
+    // Create a deterministic key based on condition properties
+    const keyParts = [
+      condition.type,
+      condition.operator,
+      condition.key,
+      JSON.stringify(condition.value), // Handle complex values
+      condition.logic,
+      // Include relevant state versions for cache invalidation
+      this.lastStatsVersion,
+      this.lastVisitedScenesLength,
+      this.lastInventoryVersion,
+      this.lastChoiceHistoryLength
+    ];
+    
+    // Handle nested conditions for complex conditions
+    if (condition.conditions) {
+      keyParts.push(JSON.stringify(condition.conditions));
+    }
+    
+    return keyParts.join('|');
+  }
+
+  // Check if cache needs invalidation due to state changes
+  shouldInvalidateCache() {
+    const statsVersion = this.statsManager?.getVersion?.() || 0;
+    const visitedScenesLength = this.visitedScenes.length;
+    const inventoryVersion = this.inventoryManager?.getVersion?.() || 0;
+    const choiceHistoryLength = this.choiceHistory.length;
+    
+    const hasChanged = (
+      statsVersion !== this.lastStatsVersion ||
+      visitedScenesLength !== this.lastVisitedScenesLength ||
+      inventoryVersion !== this.lastInventoryVersion ||
+      choiceHistoryLength !== this.lastChoiceHistoryLength
+    );
+    
+    if (hasChanged) {
+      this.lastStatsVersion = statsVersion;
+      this.lastVisitedScenesLength = visitedScenesLength;
+      this.lastInventoryVersion = inventoryVersion;
+      this.lastChoiceHistoryLength = choiceHistoryLength;
+      return true;
+    }
+    
+    return false;
+  }
+
+  // Clean up cache when it gets too large
+  cleanupCache() {
+    if (this.evaluationCache.size <= this.cacheCleanupThreshold) return;
+    
+    // Convert to array and sort by access frequency (if we tracked it) or just clear oldest
+    const entries = Array.from(this.evaluationCache.entries());
+    
+    // Simple strategy: keep the most recent half of entries
+    const keepCount = Math.floor(this.maxCacheSize / 2);
+    const toKeep = entries.slice(-keepCount);
+    
+    this.evaluationCache.clear();
+    toKeep.forEach(([key, value]) => {
+      this.evaluationCache.set(key, value);
+    });
+  }
+
+  // Get cache performance stats (for debugging/monitoring)
+  getCacheStats() {
+    const hitRate = this.cacheStats.totalEvaluations > 0 
+      ? (this.cacheStats.hits / this.cacheStats.totalEvaluations * 100).toFixed(1)
+      : '0.0';
+      
+    return {
+      ...this.cacheStats,
+      hitRate: `${hitRate}%`,
+      cacheSize: this.evaluationCache.size,
+      maxCacheSize: this.maxCacheSize
+    };
+  }
+
+  // Clear all caches (useful for testing or major state changes)
+  clearCache() {
+    this.evaluationCache.clear();
+    this.cacheStats = { hits: 0, misses: 0, totalEvaluations: 0 };
+  }
+
+  // Evaluate a single condition with caching
   evaluateCondition(condition) {
+    // Performance tracking
+    this.cacheStats.totalEvaluations++;
+    
+    // Check for cache invalidation
+    if (this.shouldInvalidateCache()) {
+      this.clearCache();
+    }
+    
+    // Generate cache key
+    const cacheKey = this.generateCacheKey(condition);
+    
+    // Check cache first
+    if (this.evaluationCache.has(cacheKey)) {
+      this.cacheStats.hits++;
+      return this.evaluationCache.get(cacheKey);
+    }
+    
+    // Cache miss - perform actual evaluation
+    this.cacheStats.misses++;
+    const result = this.evaluateConditionInternal(condition);
+    
+    // Store in cache
+    this.evaluationCache.set(cacheKey, result);
+    
+    // Cleanup cache if needed
+    if (this.evaluationCache.size > this.maxCacheSize) {
+      this.cleanupCache();
+    }
+    
+    return result;
+  }
+
+  // Internal evaluation method (the original logic)
+  evaluateConditionInternal(condition) {
     const { type, operator, key, value, logic } = condition;
     
     // Handle complex conditions with logical operators

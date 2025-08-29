@@ -29,7 +29,16 @@ export default function EditorToolbar({
   lastSaved = null,
   hasUnsavedChanges = false,
   exportFormats = ['json', 'yaml', 'xml'],
-  sessionStorage = null
+  sessionStorage = null,
+  onProjectListRefresh = () => {},
+  // Undo/Redo functionality
+  canUndo = false,
+  canRedo = false,
+  undoDescription = null,
+  redoDescription = null,
+  onUndo = () => {},
+  onRedo = () => {},
+  commandHistory = null
 }) {
   const [showValidationDetails, setShowValidationDetails] = useState(false);
   const [showProjectMenu, setShowProjectMenu] = useState(false);
@@ -95,11 +104,15 @@ export default function EditorToolbar({
     if (hasUnsavedChanges && !confirm('You have unsaved changes. Continue anyway?')) {
       return;
     }
-    
+
     const projectName = prompt('Enter project name:');
     if (projectName) {
-      await editorSession.createNewProject(projectName);
-      onNewAdventure();
+      // Ask parent to create the project so it can include current adventure data
+      if (onNewAdventure && typeof onNewAdventure === 'function') {
+        await onNewAdventure(projectName);
+      } else {
+        await editorSession.createNewProject({ name: projectName, title: projectName });
+      }
     }
     setShowProjectMenu(false);
   };
@@ -120,20 +133,36 @@ export default function EditorToolbar({
 
   const handleSaveProject = async () => {
     try {
-      if (currentProject) {
-        await editorSession.saveProject(currentProject.id, {
-          title: adventureTitle,
-          // Adventure data would be passed from parent component
-        });
-        setSaveStatus('saved');
+      // Allow Save As: ask user for a new name. If provided, pass it to parent handler
+      const saveAsName = prompt('Save as new project (enter name) — leave blank to overwrite current:');
+
+      if (onSaveEditor && typeof onSaveEditor === 'function') {
+        // Parent can handle save or save-as when given a name
+        await onSaveEditor(saveAsName && saveAsName.trim() ? saveAsName.trim() : null);
       } else {
-        // Save as new project
-        const projectName = prompt('Enter project name:', adventureTitle);
-        if (projectName) {
-          await editorSession.createProject(projectName, {
-            title: adventureTitle,
-          });
+        // Fallback: try to perform save or save-as using session storage
+        if (saveAsName && saveAsName.trim()) {
+          // Duplicate current project data into a new project
+          const name = saveAsName.trim();
+          const data = currentProject ? (currentProject.data || {}) : { adventureData: null };
+          await editorSession.createNewProject({ name, data });
+        } else {
+          if (currentProject) {
+            await editorSession.saveProject(currentProject.id, { title: adventureTitle });
+          } else {
+            const projectName = prompt('Enter project name:', adventureTitle);
+            if (projectName) {
+              await editorSession.createProject({ name: projectName, title: adventureTitle });
+            }
+          }
         }
+      }
+
+      setSaveStatus('saved');
+
+      // Refresh project list UI after save
+      if (onProjectListRefresh && typeof onProjectListRefresh === 'function') {
+        await onProjectListRefresh();
       }
     } catch (error) {
       alert(`Failed to save project: ${error.message}`);
@@ -146,6 +175,10 @@ export default function EditorToolbar({
         await editorSession.deleteProject(projectId);
         if (currentProject && currentProject.id === projectId) {
           onNewAdventure();
+        }
+        // Refresh the project list after deletion
+        if (onProjectListRefresh) {
+          await onProjectListRefresh();
         }
       } catch (error) {
         alert(`Failed to delete project: ${error.message}`);
@@ -184,20 +217,67 @@ export default function EditorToolbar({
     setShowTemplateMenu(false);
   };
 
+  // Enhanced autosave feedback system
+  const [saveState, setSaveState] = useState({
+    status: 'idle', // 'idle', 'saving', 'saved', 'error', 'offline', 'conflict'
+    progress: 0,
+    isOnline: true,
+    lastSaved: null,
+    retryCount: 0,
+    queueSize: 0,
+    conflictData: null
+  });
+
+  // Subscribe to save status changes
+  useEffect(() => {
+    if (!sessionStorage) return;
+    
+    const unsubscribe = editorSession.onSaveStatusChange((status) => {
+      setSaveState(status);
+    });
+    
+    return unsubscribe;
+  }, [editorSession, sessionStorage]);
+
   const getSaveStatusDisplay = () => {
-    switch (saveStatus) {
+    switch (saveState.status) {
       case 'saving':
-        return { text: 'Saving...', className: 'text-blue-600' };
+        return { 
+          text: `Saving... ${Math.round(saveState.progress)}%`, 
+          className: 'text-blue-600',
+          showSpinner: true,
+          progress: saveState.progress
+        };
       case 'saved':
         return { 
-          text: lastSaved ? `Saved ${new Date(lastSaved).toLocaleTimeString()}` : 'Saved', 
-          className: 'text-green-600' 
+          text: saveState.lastSaved ? `Saved ${new Date(saveState.lastSaved).toLocaleTimeString()}` : 'Saved', 
+          className: 'text-green-600',
+          showCheckmark: true
         };
-      case 'modified':
-        return { text: 'Unsaved changes', className: 'text-orange-600' };
       case 'error':
-        return { text: 'Save failed', className: 'text-red-600' };
+        return { 
+          text: saveState.retryCount > 0 ? `Save failed (retry ${saveState.retryCount})` : 'Save failed', 
+          className: 'text-red-600',
+          showError: true,
+          showRetry: true
+        };
+      case 'offline':
+        return { 
+          text: 'Offline - changes saved locally', 
+          className: 'text-orange-600',
+          showOffline: true
+        };
+      case 'conflict':
+        return { 
+          text: 'Save conflict detected', 
+          className: 'text-yellow-600',
+          showConflict: true
+        };
+      case 'idle':
       default:
+        if (hasUnsavedChanges) {
+          return { text: 'Unsaved changes', className: 'text-orange-600' };
+        }
         return { text: '', className: 'text-gray-600' };
     }
   };
@@ -291,11 +371,90 @@ export default function EditorToolbar({
         }, '●')
       ]),
 
-      // Save status
+      // Enhanced Save status with visual indicators
       React.createElement('div', {
         key: 'save-status',
-        className: `text-xs ${saveStatusDisplay.className}`
-      }, saveStatusDisplay.text)
+        className: 'flex items-center space-x-2'
+      }, [
+        // Progress bar for saving
+        saveStatusDisplay.showSpinner && React.createElement('div', {
+          key: 'progress-container',
+          className: 'flex items-center space-x-1'
+        }, [
+          React.createElement('div', {
+            key: 'spinner',
+            className: 'animate-spin w-3 h-3 border border-blue-600 border-t-transparent rounded-full'
+          }),
+          React.createElement('div', {
+            key: 'progress-bar',
+            className: 'w-12 h-1 bg-gray-200 rounded-full overflow-hidden'
+          }, React.createElement('div', {
+            className: 'h-full bg-blue-600 transition-all duration-300',
+            style: { width: `${saveStatusDisplay.progress || 0}%` }
+          }))
+        ]),
+
+        // Status icons
+        saveStatusDisplay.showCheckmark && React.createElement('span', {
+          key: 'checkmark',
+          className: 'text-green-600 text-sm'
+        }, '✓'),
+
+        saveStatusDisplay.showError && React.createElement('span', {
+          key: 'error-icon',
+          className: 'text-red-600 text-sm'
+        }, '⚠️'),
+
+        saveStatusDisplay.showOffline && React.createElement('span', {
+          key: 'offline-icon',
+          className: 'text-orange-600 text-sm'
+        }, '📴'),
+
+        saveStatusDisplay.showConflict && React.createElement('span', {
+          key: 'conflict-icon',
+          className: 'text-yellow-600 text-sm'
+        }, '⚡'),
+
+        // Save queue indicator
+        saveState.queueSize > 0 && React.createElement('span', {
+          key: 'queue-indicator',
+          className: 'text-xs text-gray-500 bg-gray-100 px-1 rounded',
+          title: `${saveState.queueSize} saves queued`
+        }, saveState.queueSize),
+
+        // Status text
+        React.createElement('div', {
+          key: 'save-text',
+          className: `text-xs ${saveStatusDisplay.className}`,
+          'data-save-status': true
+        }, saveStatusDisplay.text),
+
+        // Retry button for failed saves
+        saveStatusDisplay.showRetry && React.createElement('button', {
+          key: 'retry-btn',
+          onClick: () => {
+            if (currentProject && editorSession) {
+              editorSession.forceSave(currentProject.id, { 
+                title: adventureTitle,
+                // Add current editor data here
+              });
+            }
+          },
+          className: 'text-xs text-red-600 hover:text-red-800 underline',
+          title: 'Retry save'
+        }, 'Retry'),
+
+        // Conflict resolution button
+        saveStatusDisplay.showConflict && React.createElement('button', {
+          key: 'resolve-btn',
+          onClick: () => {
+            // Show conflict resolution dialog
+            alert('Conflict resolution dialog would appear here');
+          },
+          className: 'text-xs text-yellow-600 hover:text-yellow-800 underline',
+          title: 'Resolve conflict'
+        }, 'Resolve')
+      ])
     ]),
 
     // Center section - Scene tools and templates
@@ -317,6 +476,58 @@ export default function EditorToolbar({
         size: 'sm',
         disabled: !selectedNodeId
       }, 'Delete'),
+
+      // Undo/Redo buttons
+      React.createElement('div', {
+        key: 'undo-redo-group',
+        className: 'flex items-center space-x-1 border-l border-gray-300 pl-3 ml-3'
+      }, [
+        React.createElement(Button, {
+          key: 'undo-btn',
+          onClick: onUndo,
+          variant: 'secondary',
+          size: 'sm',
+          disabled: !canUndo,
+          title: undoDescription ? `Undo: ${undoDescription}` : 'Undo (Ctrl+Z)'
+        }, [
+          React.createElement('span', { key: 'undo-icon', className: 'mr-1' }, '↶'),
+          React.createElement('span', { key: 'undo-text' }, 'Undo')
+        ]),
+        
+        React.createElement(Button, {
+          key: 'redo-btn',
+          onClick: onRedo,
+          variant: 'secondary',
+          size: 'sm',
+          disabled: !canRedo,
+          title: redoDescription ? `Redo: ${redoDescription}` : 'Redo (Ctrl+Y)'
+        }, [
+          React.createElement('span', { key: 'redo-icon', className: 'mr-1' }, '↷'),
+          React.createElement('span', { key: 'redo-text' }, 'Redo')
+        ]),
+        
+        React.createElement(Button, {
+          key: 'history-btn',
+          onClick: () => window.dispatchEvent(new CustomEvent('showActionHistory')),
+          variant: 'secondary',
+          size: 'sm',
+          title: 'Show Action History (Ctrl+H)'
+        }, [
+          React.createElement('span', { key: 'history-icon', className: 'mr-1' }, '⏱️'),
+          React.createElement('span', { key: 'history-text' }, 'History')
+        ]),
+        
+        React.createElement(Button, {
+          key: 'search-btn',
+          onClick: () => window.dispatchEvent(new CustomEvent('showSearchPanel')),
+          variant: 'secondary',
+          size: 'sm',
+          title: 'Search & Filter (Ctrl+F)'
+        }, [
+          React.createElement('span', { key: 'search-icon', className: 'mr-1' }, '🔍'),
+          React.createElement('span', { key: 'search-text' }, 'Search')
+        ])
+      ]),
 
       // Template menu
       React.createElement('div', {

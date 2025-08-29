@@ -17,6 +17,9 @@ export function GameScreen() {
     loadGame,
     deleteSave,
     quickSave,
+  exportCrossGameSave,
+  importCrossGameSave,
+  getSaveAnalytics,
     isGameLoaded,
     isPlaying,
     hasError,
@@ -199,10 +202,13 @@ export function GameScreen() {
       onLoad: loadGame,
       onDelete: deleteSave,
       onQuickSave: quickSave,
-      canSave: gameState.canSave,
-      canLoad: gameState.canLoad,
-      isLoading,
-      onClose: () => setShowSaveMenu(false)
+  onExportCrossGame: exportCrossGameSave,
+  onImportCrossGame: importCrossGameSave,
+  onGetSaveAnalytics: getSaveAnalytics,
+  canSave: gameState.canSave,
+  canLoad: gameState.canLoad,
+  isLoading,
+  onClose: () => setShowSaveMenu(false)
     })
   ]);
 }

@@ -1,7 +1,7 @@
  
-import React, { createElement } from "https://esm.sh/react@18";
+import React, { createElement, memo } from "https://esm.sh/react@18";
 
-export function Button({
+export const Button = memo(function Button({
   children,
   onClick,
   disabled = false,
@@ -37,4 +37,4 @@ export function Button({
     onClick,
     disabled,
   }, children);
-}
+});

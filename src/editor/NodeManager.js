@@ -1,14 +1,38 @@
-// NodeManager.js - Visual node positioning and connections
-// Handles: node layout, drag/drop, auto-positioning, viewport management
+// NodeManager.js - Advanced node management with viewport culling and memory optimization
+// Handles: node layout, drag/drop, auto-positioning, viewport management, performance optimization
 
 class NodeManager {
-  constructor() {
+  constructor(options = {}) {
     this.nodes = new Map();
     this.viewport = { x: 0, y: 0, zoom: 1 };
     this.nodeSize = { width: 200, height: 120 };
     this.gridSize = 20;
     this.snapToGrid = false;
     this.listeners = new Map();
+    
+    // Performance optimization settings
+    this.cullingEnabled = options.enableCulling !== false;
+    this.bufferZone = options.bufferZone || 200; // Extra rendering area around viewport
+    this.memoryOptimizationEnabled = options.enableMemoryOptimization !== false;
+    this.maxVisibleNodes = options.maxVisibleNodes || 1000;
+    this.lazyLoadThreshold = options.lazyLoadThreshold || 500;
+    
+    // Caching and optimization
+    this.visibilityCache = new Map();
+    this.lastViewportHash = null;
+    this.nodeRenderCache = new Map();
+    this.offScreenNodes = new Set();
+    this.performanceStats = {
+      totalNodes: 0,
+      visibleNodes: 0,
+      culledNodes: 0,
+      memoryUsage: 0,
+      renderTime: 0
+    };
+    
+    // Debouncing for performance
+    this.updateDebounceTimeout = null;
+    this.lastUpdateTime = 0;
   }
 
   // Event system
@@ -36,25 +60,40 @@ class NodeManager {
     }
   }
 
-  // Node management
+  // Enhanced node management with performance tracking
   addNode(nodeId, node) {
-    this.nodes.set(nodeId, {
+    const nodeData = {
       ...node,
-      position: this.snapPosition(node.position || { x: 0, y: 0 })
-    });
-    this.emit('nodeAdded', { nodeId, node: this.nodes.get(nodeId) });
+      position: this.snapPosition(node.position || { x: 0, y: 0 }),
+      lastAccessed: Date.now(),
+      renderPriority: node.isStartScene ? 10 : 1,
+      memoryFootprint: this.calculateNodeMemoryFootprint(node)
+    };
+    
+    this.nodes.set(nodeId, nodeData);
+    this.invalidateVisibilityCache();
+    this.updatePerformanceStats();
+    this.emit('nodeAdded', { nodeId, node: nodeData });
   }
 
   updateNode(nodeId, updates) {
     const node = this.nodes.get(nodeId);
     if (!node) return null;
 
-    const updatedNode = { ...node, ...updates };
+    const updatedNode = { 
+      ...node, 
+      ...updates,
+      lastAccessed: Date.now(),
+      memoryFootprint: updates.content ? this.calculateNodeMemoryFootprint({ ...node, ...updates }) : node.memoryFootprint
+    };
+    
     if (updates.position) {
       updatedNode.position = this.snapPosition(updates.position);
+      this.invalidateVisibilityCache(); // Position changes affect visibility
     }
 
     this.nodes.set(nodeId, updatedNode);
+    this.updatePerformanceStats();
     this.emit('nodeUpdated', { nodeId, node: updatedNode });
     return updatedNode;
   }
@@ -64,6 +103,10 @@ class NodeManager {
     if (!node) return false;
 
     this.nodes.delete(nodeId);
+    this.visibilityCache.delete(nodeId);
+    this.nodeRenderCache.delete(nodeId);
+    this.offScreenNodes.delete(nodeId);
+    this.updatePerformanceStats();
     this.emit('nodeRemoved', { nodeId, node });
     return true;
   }
@@ -522,7 +565,262 @@ class NodeManager {
     return { minX, minY, maxX, maxY };
   }
 
-  // Settings
+  // Advanced viewport culling and visibility management
+  getVisibleNodes(viewportBounds = null, forceUpdate = false) {
+    const bounds = viewportBounds || this.calculateViewportBounds();
+    const viewportHash = this.hashViewport(bounds);
+
+    // Use cached result if viewport hasn't changed significantly
+    if (!forceUpdate && this.lastViewportHash === viewportHash && this.visibilityCache.size > 0) {
+      return Array.from(this.visibilityCache.values());
+    }
+
+    const startTime = performance.now();
+    const visibleNodes = [];
+    const culledNodes = [];
+
+    // Enhanced culling with buffer zone for smooth scrolling
+    const bufferedBounds = {
+      left: bounds.left - this.bufferZone,
+      right: bounds.right + this.bufferZone,
+      top: bounds.top - this.bufferZone,
+      bottom: bounds.bottom + this.bufferZone
+    };
+
+    this.visibilityCache.clear();
+
+    for (const [nodeId, node] of this.nodes) {
+      const nodeBounds = this.getNodeBounds(nodeId);
+
+      if (this.boundsIntersect(nodeBounds, bufferedBounds)) {
+        // Node is visible - update access time and add to visible list
+        node.lastAccessed = Date.now();
+        const visibleNodeData = {
+          nodeId,
+          node,
+          priority: this.calculateRenderPriority(node, bounds),
+          distance: this.calculateDistanceToViewport(nodeBounds, bounds)
+        };
+
+        visibleNodes.push(visibleNodeData);
+        this.visibilityCache.set(nodeId, visibleNodeData);
+        this.offScreenNodes.delete(nodeId);
+      } else {
+        // Node is off-screen
+        culledNodes.push(nodeId);
+        this.offScreenNodes.add(nodeId);
+
+        // Unload node content if memory optimization is enabled
+        if (this.memoryOptimizationEnabled && this.shouldUnloadNode(node)) {
+          this.unloadNodeContent(nodeId);
+        }
+      }
+    }
+
+    // Sort visible nodes by priority for optimal rendering
+    visibleNodes.sort((a, b) => b.priority - a.priority);
+
+    // Limit visible nodes if necessary for performance
+    const finalVisibleNodes = visibleNodes.slice(0, this.maxVisibleNodes);
+
+    this.lastViewportHash = viewportHash;
+    this.performanceStats.renderTime = performance.now() - startTime;
+    this.performanceStats.visibleNodes = finalVisibleNodes.length;
+    this.performanceStats.culledNodes = culledNodes.length;
+
+    this.emit('visibilityUpdated', {
+      visible: finalVisibleNodes,
+      culled: culledNodes,
+      performance: this.performanceStats
+    });
+
+    return finalVisibleNodes;
+  }
+  calculateViewportBounds() {
+    const { x, y, zoom } = this.viewport;
+    const viewportWidth = (typeof window !== 'undefined' ? window.innerWidth : 1200) / zoom;
+    const viewportHeight = (typeof window !== 'undefined' ? window.innerHeight : 800) / zoom;
+    
+    return {
+      left: -x / zoom,
+      right: (-x + viewportWidth) / zoom,
+      top: -y / zoom,
+      bottom: (-y + viewportHeight) / zoom
+    };
+  }
+  
+  boundsIntersect(bounds1, bounds2) {
+    return !(bounds1.right < bounds2.left || 
+             bounds1.x > bounds2.right ||
+             bounds1.bottom < bounds2.top ||
+             bounds1.y > bounds2.bottom);
+  }
+  
+  calculateRenderPriority(node, viewportBounds) {
+    let priority = node.renderPriority || 1;
+    
+    // Boost priority for start scenes
+    if (node.isStartScene) priority += 10;
+    
+    // Boost priority for recently accessed nodes
+    const timeSinceAccess = Date.now() - (node.lastAccessed || 0);
+    if (timeSinceAccess < 30000) priority += 5; // Within 30 seconds
+    
+    // Boost priority for nodes with many connections
+    if (node.choices && node.choices.length > 5) priority += 3;
+    
+    // Distance-based priority (closer = higher priority)
+    const nodeBounds = this.getNodeBounds(node.id);
+    const distance = this.calculateDistanceToViewport(nodeBounds, viewportBounds);
+    priority += Math.max(0, 10 - distance / 100);
+    
+    return priority;
+  }
+  
+  calculateDistanceToViewport(nodeBounds, viewportBounds) {
+    const nodeCenter = {
+      x: nodeBounds.centerX,
+      y: nodeBounds.centerY
+    };
+    
+    const viewportCenter = {
+      x: (viewportBounds.left + viewportBounds.right) / 2,
+      y: (viewportBounds.top + viewportBounds.bottom) / 2
+    };
+    
+    const dx = nodeCenter.x - viewportCenter.x;
+    const dy = nodeCenter.y - viewportCenter.y;
+    
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+  
+  hashViewport(bounds) {
+    // Create a hash of the viewport for caching purposes
+    const precision = 10; // Round to nearest 10 pixels for stability
+    return [
+      Math.round(bounds.left / precision),
+      Math.round(bounds.top / precision),
+      Math.round(bounds.right / precision),
+      Math.round(bounds.bottom / precision)
+    ].join(',');
+  }
+  
+  invalidateVisibilityCache() {
+    this.visibilityCache.clear();
+    this.lastViewportHash = null;
+  }
+  
+  // Memory optimization methods
+  calculateNodeMemoryFootprint(node) {
+    let size = 1000; // Base size
+    if (node.content) size += node.content.length * 2;
+    if (node.choices) size += node.choices.length * 500;
+    if (node.metadata) size += JSON.stringify(node.metadata).length;
+    return size;
+  }
+  
+  shouldUnloadNode(node) {
+    const timeSinceAccess = Date.now() - (node.lastAccessed || 0);
+    const isLargeNode = node.memoryFootprint > 10000;
+    const isOldAccess = timeSinceAccess > 300000; // 5 minutes
+    
+    return isLargeNode && isOldAccess && !node.isStartScene;
+  }
+  
+  unloadNodeContent(nodeId) {
+    const node = this.nodes.get(nodeId);
+    if (!node || node.isContentUnloaded) return;
+    
+    // Store original content in compressed cache
+    if (node.content && node.content.length > 1000) {
+      this.nodeRenderCache.set(`${nodeId}_content`, node.content);
+      node.content = '[Content unloaded - will reload when visible]';
+      node.isContentUnloaded = true;
+      
+      this.emit('nodeContentUnloaded', { nodeId, memorySaved: node.memoryFootprint });
+    }
+  }
+  
+  reloadNodeContent(nodeId) {
+    const node = this.nodes.get(nodeId);
+    if (!node || !node.isContentUnloaded) return;
+    
+    const cachedContent = this.nodeRenderCache.get(`${nodeId}_content`);
+    if (cachedContent) {
+      node.content = cachedContent;
+      node.isContentUnloaded = false;
+      node.lastAccessed = Date.now();
+      this.nodeRenderCache.delete(`${nodeId}_content`);
+      
+      this.emit('nodeContentReloaded', { nodeId });
+    }
+  }
+  
+  // Performance monitoring and optimization
+  updatePerformanceStats() {
+    this.performanceStats.totalNodes = this.nodes.size;
+    this.performanceStats.memoryUsage = Array.from(this.nodes.values())
+      .reduce((total, node) => total + (node.memoryFootprint || 1000), 0);
+  }
+  
+  getPerformanceStats() {
+    const stats = { ...this.performanceStats };
+    stats.cullingRatio = stats.totalNodes > 0 ? 
+      Math.round((stats.culledNodes / stats.totalNodes) * 100) : 0;
+    stats.memoryEfficiency = stats.totalNodes > this.lazyLoadThreshold;
+    stats.offScreenNodes = this.offScreenNodes.size;
+    
+    return stats;
+  }
+  
+  optimizeMemoryUsage() {
+    if (!this.memoryOptimizationEnabled) return;
+    
+    let unloadedCount = 0;
+    const currentTime = Date.now();
+    
+    for (const [nodeId, node] of this.nodes) {
+      if (this.offScreenNodes.has(nodeId) && this.shouldUnloadNode(node)) {
+        this.unloadNodeContent(nodeId);
+        unloadedCount++;
+      }
+    }
+    
+    // Cleanup old cache entries
+    const cacheKeys = Array.from(this.nodeRenderCache.keys());
+    for (const key of cacheKeys) {
+      const nodeId = key.split('_')[0];
+      const node = this.nodes.get(nodeId);
+      if (!node || currentTime - (node.lastAccessed || 0) > 600000) { // 10 minutes
+        this.nodeRenderCache.delete(key);
+      }
+    }
+    
+    this.emit('memoryOptimized', { unloadedNodes: unloadedCount });
+    return unloadedCount;
+  }
+  
+  // Enhanced viewport management with culling integration
+  setViewport(viewport, skipCullingUpdate = false) {
+    const oldViewport = { ...this.viewport };
+    this.viewport = { ...this.viewport, ...viewport };
+    
+    // Debounce visibility updates during rapid viewport changes
+    if (!skipCullingUpdate && this.cullingEnabled) {
+      if (this.updateDebounceTimeout) {
+        clearTimeout(this.updateDebounceTimeout);
+      }
+      
+      this.updateDebounceTimeout = setTimeout(() => {
+        this.getVisibleNodes(null, true); // Force update
+        this.updateDebounceTimeout = null;
+      }, 16); // ~60fps
+    }
+    
+    this.emit('viewportChanged', { old: oldViewport, new: this.viewport });
+  }
+  
+  // Settings with performance implications
   setSnapToGrid(enabled) {
     this.snapToGrid = enabled;
     this.emit('settingsChanged', { snapToGrid: this.snapToGrid });
@@ -535,7 +833,151 @@ class NodeManager {
 
   setNodeSize(width, height) {
     this.nodeSize = { width, height };
+    this.invalidateVisibilityCache(); // Node size affects visibility
     this.emit('settingsChanged', { nodeSize: this.nodeSize });
+  }
+  
+  setCullingEnabled(enabled) {
+    this.cullingEnabled = enabled;
+    if (enabled) {
+      this.getVisibleNodes(null, true);
+    } else {
+      this.invalidateVisibilityCache();
+    }
+    this.emit('settingsChanged', { cullingEnabled: this.cullingEnabled });
+  }
+  
+  setMemoryOptimization(enabled) {
+    this.memoryOptimizationEnabled = enabled;
+    if (enabled) {
+      this.optimizeMemoryUsage();
+    } else {
+      // Reload all unloaded content
+      for (const nodeId of Array.from(this.nodes.keys())) {
+        this.reloadNodeContent(nodeId);
+      }
+    }
+    this.emit('settingsChanged', { memoryOptimizationEnabled: this.memoryOptimizationEnabled });
+  }
+  
+  // Search and highlighting functionality
+  searchNodes(query, options = {}) {
+    if (!query.trim()) return [];
+    
+    const {
+      searchTitles = true,
+      searchContent = true,
+      searchChoices = true,
+      caseSensitive = false,
+      wholeWords = false,
+      useRegex = false
+    } = options;
+    
+    const results = [];
+    let searchRegex;
+    
+    try {
+      const flags = `g${!caseSensitive ? 'i' : ''}`;
+      if (useRegex) {
+        searchRegex = new RegExp(query, flags);
+      } else {
+        const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const pattern = wholeWords ? `\\b${escapedQuery}\\b` : escapedQuery;
+        searchRegex = new RegExp(pattern, flags);
+      }
+    } catch (error) {
+      // Invalid regex - fall back to literal search
+      const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      searchRegex = new RegExp(escapedQuery, `g${!caseSensitive ? 'i' : ''}`);
+    }
+    
+    for (const [nodeId, node] of this.nodes) {
+      const nodeMatches = [];
+      
+      // Search in title
+      if (searchTitles && node.title) {
+        const matches = [...node.title.matchAll(searchRegex)];
+        matches.forEach(match => {
+          nodeMatches.push({
+            type: 'title',
+            text: node.title,
+            match: match[0],
+            index: match.index
+          });
+        });
+      }
+      
+      // Search in content
+      if (searchContent && node.content) {
+        const matches = [...node.content.matchAll(searchRegex)];
+        matches.forEach(match => {
+          nodeMatches.push({
+            type: 'content',
+            text: node.content,
+            match: match[0],
+            index: match.index
+          });
+        });
+      }
+      
+      // Search in choices
+      if (searchChoices && node.choices) {
+        node.choices.forEach((choice, choiceIndex) => {
+          if (choice.text) {
+            const matches = [...choice.text.matchAll(searchRegex)];
+            matches.forEach(match => {
+              nodeMatches.push({
+                type: 'choice',
+                text: choice.text,
+                match: match[0],
+                index: match.index,
+                choiceIndex: choiceIndex,
+                choiceId: choice.id
+              });
+            });
+          }
+        });
+      }
+      
+      if (nodeMatches.length > 0) {
+        results.push({
+          nodeId,
+          node,
+          matches: nodeMatches,
+          matchCount: nodeMatches.length
+        });
+      }
+    }
+    
+    return results.sort((a, b) => b.matchCount - a.matchCount);
+  }
+  
+  setSearchHighlights(highlights) {
+    this.searchHighlights = highlights || [];
+    this.emit('searchHighlightsChanged', this.searchHighlights);
+  }
+  
+  getSearchHighlights() {
+    return this.searchHighlights || [];
+  }
+  
+  clearSearchHighlights() {
+    this.searchHighlights = [];
+    this.emit('searchHighlightsChanged', []);
+  }
+
+  // Cleanup method for component unmounting
+  destroy() {
+    if (this.updateDebounceTimeout) {
+      clearTimeout(this.updateDebounceTimeout);
+    }
+    
+    this.nodes.clear();
+    this.visibilityCache.clear();
+    this.nodeRenderCache.clear();
+    this.offScreenNodes.clear();
+    this.listeners.clear();
+    this.searchHighlights = [];
   }
 }
 

@@ -8,6 +8,7 @@ import React, { useState } from "https://esm.sh/react@18";
 export default function EditorSidebar({
   selectedNode = null,
   adventureStats = [],
+  availableScenes = [],
   onNodeUpdate = () => {},
   onChoiceAdd = () => {},
   onChoiceUpdate = () => {},
@@ -146,7 +147,7 @@ export default function EditorSidebar({
               }, [
                 choice.targetSceneId && React.createElement('div', {
                   key: 'target'
-                }, `→ ${choice.targetSceneId}`),
+                }, `→ ${availableScenes.find(s => s.id === choice.targetSceneId)?.title || choice.targetSceneId}`),
                 choice.conditions && choice.conditions.length > 0 && React.createElement('div', {
                   key: 'conditions',
                   className: 'text-yellow-600'

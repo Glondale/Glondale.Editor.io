@@ -20,6 +20,20 @@ export class ChoiceEvaluator {
     
     // Cache for performance - cleared when game state changes
     this.evaluationCache = new Map();
+    this.visitedScenes = [];
+    this.choiceHistory = [];
+  }
+
+  // Allow StoryEngine to update visited scenes (compatibility)
+  updateVisitedScenes(scenes = []) {
+    this.visitedScenes = Array.isArray(scenes) ? scenes : [];
+    this.clearCache();
+  }
+
+  // Allow StoryEngine to update choice history (compatibility)
+  updateChoiceHistory(history = []) {
+    this.choiceHistory = Array.isArray(history) ? history : [];
+    this.clearCache();
   }
 
   /**
@@ -36,7 +50,12 @@ export class ChoiceEvaluator {
     }
 
     const result = this._performEvaluation(choice, discoveredSecrets);
-    
+
+    // Backwards-compatibility: some callers expect `evaluation.state`; mirror `type` to `state` when missing
+    if (!result.state && result.type) {
+      result.state = result.type;
+    }
+
     // Cache result for subsequent calls
     this.evaluationCache.set(cacheKey, result);
     return result;
@@ -67,6 +86,7 @@ export class ChoiceEvaluator {
       isVisible: true,
       isSelectable: true,
       type: 'VISIBLE',
+      state: 'VISIBLE',
       reason: null
     };
   }
@@ -77,25 +97,29 @@ export class ChoiceEvaluator {
    */
   _evaluateSecretChoice(choice, discoveredSecrets) {
     const isDiscovered = discoveredSecrets.includes(choice.id);
-    
+
     if (!isDiscovered) {
       // Check if conditions are met to discover this secret
       const shouldDiscover = this._checkDiscoveryConditions(choice);
-      
+
       if (shouldDiscover) {
+        // When discoverable, report as VISIBLE so UI can show and mark discovery
         return {
           isVisible: true,
           isSelectable: true,
           type: 'SECRET_DISCOVERED',
+          state: 'VISIBLE',
           reason: 'Secret choice discovered!',
           shouldMarkAsDiscovered: true
         };
       }
 
+      // Hidden secrets should be treated as HIDDEN for UI filtering
       return {
         isVisible: false,
         isSelectable: false,
         type: 'SECRET_HIDDEN',
+        state: 'HIDDEN',
         reason: 'Secret choice not yet discovered'
       };
     }
@@ -107,6 +131,7 @@ export class ChoiceEvaluator {
         isVisible: true,
         isSelectable: requirementsMet,
         type: 'SECRET_AVAILABLE',
+        state: requirementsMet ? 'VISIBLE' : 'LOCKED',
         reason: requirementsMet ? null : this._getRequirementsFailureReason(choice.requirements)
       };
     }
@@ -115,6 +140,7 @@ export class ChoiceEvaluator {
       isVisible: true,
       isSelectable: true,
       type: 'SECRET_AVAILABLE',
+      state: 'VISIBLE',
       reason: null
     };
   }
@@ -131,7 +157,8 @@ export class ChoiceEvaluator {
       isVisible: true,
       isSelectable: requirementsMet,
       type: requirementsMet ? 'UNLOCKED' : 'LOCKED',
-      reason: requirementsMet ? null : this._getRequirementsFailureReason(requirements)
+  state: requirementsMet ? 'VISIBLE' : 'LOCKED',
+  reason: requirementsMet ? null : this._getRequirementsFailureReason(requirements)
     };
   }
 
@@ -147,8 +174,9 @@ export class ChoiceEvaluator {
       return {
         isVisible: false,
         isSelectable: false,
-        type: 'HIDDEN',
-        reason: 'Conditions not met'
+  type: 'HIDDEN',
+  state: 'HIDDEN',
+  reason: 'Conditions not met'
       };
     }
 
@@ -159,6 +187,7 @@ export class ChoiceEvaluator {
         isVisible: true,
         isSelectable: requirementsMet,
         type: requirementsMet ? 'VISIBLE' : 'LOCKED',
+        state: requirementsMet ? 'VISIBLE' : 'LOCKED',
         reason: requirementsMet ? null : this._getRequirementsFailureReason(choice.requirements)
       };
     }
@@ -167,6 +196,7 @@ export class ChoiceEvaluator {
       isVisible: true,
       isSelectable: true,
       type: 'VISIBLE',
+      state: 'VISIBLE',
       reason: null
     };
   }
