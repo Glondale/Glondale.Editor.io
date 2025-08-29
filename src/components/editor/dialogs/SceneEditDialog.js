@@ -1,6 +1,6 @@
 // SceneEditDialog.js - Enhanced with Phase 3 advanced features
 import { Button } from '../../common/Button.js';
-import { ConditionBuilder } from './ConditionBuilder.js';
+import ConditionBuilder from './ConditionBuilder.js';
 import { AdvancedChoiceDialog } from '../AdvancedChoiceDialog.js';
 
 import React, { useState, useEffect, useRef } from "https://esm.sh/react@18";

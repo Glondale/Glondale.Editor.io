@@ -770,3 +770,5 @@ export class CompatibilityChecker {
   checkComplexityCompatibility() { return { bonus: 5, warnings: [] }; }
   calculateFeatureOverlap() { return { bonus: 15, suggestions: [] }; }
 }
+
+export default new CompatibilityChecker();

@@ -15,7 +15,7 @@
  * - ValidationEngine: Validate sessions before save
  */
 
-export class EditorSessionStorage {
+class EditorSessionStorage {
   constructor() {
     this.storagePrefix = 'adventure_editor_';
     this.autoSaveInterval = null;
@@ -714,3 +714,5 @@ export class EditorSessionStorage {
     }
   }
 }
+
+export default EditorSessionStorage;

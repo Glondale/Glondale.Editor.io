@@ -1,4 +1,6 @@
  
+import React, { useState, useCallback } from "https://esm.sh/react@18";
+
 /**
  * ConditionBuilder.js - Visual condition creation component
  * 
@@ -16,9 +18,7 @@
  * - Editor dialogs: Scene and choice editing integration
  */
 
-import React, { useState, useCallback, useMemo } from 'https://esm.sh/react@18';
-
-export function ConditionBuilder({ 
+export default function ConditionBuilder({ 
   conditions = [], 
   onConditionsChange, 
   availableStats = [], 

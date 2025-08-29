@@ -1,4 +1,4 @@
- /**
+/**
  * AdvancedChoiceDialog.js - Enhanced choice editing with secret/locked features
  * 
  * Features:
@@ -16,18 +16,18 @@
  */
 
 import React, { useState, useCallback, useMemo, useEffect } from 'https://esm.sh/react@18';
-import { ConditionBuilder } from '../common/ConditionBuilder.js';
+import ConditionBuilder from '../common/ConditionBuilder.js';
 
-export function AdvancedChoiceDialog({ 
+export function AdvancedChoiceDialog({
   choice = null, 
   isOpen = false, 
   onSave, 
-  onCancel,
-  availableStats = [],
-  availableFlags = [],
-  availableItems = [],
-  availableScenes = [],
-  existingChoices = []
+  onCancel, 
+  availableStats = [], 
+  availableFlags = [], 
+  availableItems = [], 
+  availableScenes = [], 
+  existingChoices = [] 
 }) {
   const [choiceData, setChoiceData] = useState({
     id: '',
@@ -41,11 +41,11 @@ export function AdvancedChoiceDialog({
     actions: [],
     description: '',
     category: 'normal'
-  });
+  });}
 
+  const [validationErrors, setValidationErrors] = useState([]);
   const [activeTab, setActiveTab] = useState('basic');
   const [showPreview, setShowPreview] = useState(false);
-  const [validationErrors, setValidationErrors] = useState([]);
 
   // Initialize choice data when dialog opens
   useEffect(() => {
@@ -208,8 +208,6 @@ export function AdvancedChoiceDialog({
       hasActions: choiceData.actions.length > 0
     };
   }, [choiceData]);
-
-  if (!isOpen) return null;
 
   return React.createElement('div', {
     className: 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50'
@@ -481,8 +479,7 @@ export function AdvancedChoiceDialog({
                 actions: choiceData.actions,
                 onActionsChange: handleActionsChange,
                 availableStats,
-                availableFlags,
-                availableItems
+                availableFlags
               })
             )
           )
@@ -612,12 +609,10 @@ export function AdvancedChoiceDialog({
         )
       )
     )
-  );
-}
-
+  )
 // Simple action builder component
 function ActionBuilder({ actions = [], onActionsChange, availableStats = [], availableFlags = [] }) {
-  const handleAddAction = useCallback(() => {
+  const handleAddAction = React.useCallback(() => {
     const newAction = {
       id: generateActionId(),
       type: 'set_stat',
@@ -627,14 +622,14 @@ function ActionBuilder({ actions = [], onActionsChange, availableStats = [], ava
     onActionsChange([...actions, newAction]);
   }, [actions, onActionsChange, availableStats]);
 
-  const handleActionUpdate = useCallback((index, updates) => {
+  const handleActionUpdate = React.useCallback((index, updates) => {
     const updatedActions = actions.map((action, i) => 
       i === index ? { ...action, ...updates } : action
     );
     onActionsChange(updatedActions);
   }, [actions, onActionsChange]);
 
-  const handleActionDelete = useCallback((index) => {
+  const handleActionDelete = React.useCallback((index) => {
     const updatedActions = actions.filter((_, i) => i !== index);
     onActionsChange(updatedActions);
   }, [actions, onActionsChange]);
@@ -717,11 +712,10 @@ function ActionBuilder({ actions = [], onActionsChange, availableStats = [], ava
   );
 }
 
-// Helper functions
-function generateChoiceId() {
-  return 'choice_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5);
-}
+const generateChoiceId = () => {
+  return `choice_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+};
 
-function generateActionId() {
-  return 'action_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5);
-}
+const generateActionId = () => {
+  return `action_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+};

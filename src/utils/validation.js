@@ -1,5 +1,5 @@
 // validation.js - Enhanced with Phase 3 advanced validation features
-import { compatibilityChecker } from '../utils/compatibilityChecker.js';
+import compatibilityChecker from './compatibilityChecker.js';
 
 // Enhanced adventure validation with Phase 3 features
 export function validateAdventure(adventure) {
