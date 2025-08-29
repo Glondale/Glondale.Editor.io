@@ -1,6 +1,6 @@
 // EditorToolbar.js - Enhanced with Phase 3 advanced features
 import { Button } from '../../common/Button.js';
-import { EditorSessionStorage } from '../../engine/EditorSessionStorage.js';
+import EditorSessionStorage from '../../../engine/EditorSessionStorage';
 
 const { useState, useEffect, useRef } = React;
 

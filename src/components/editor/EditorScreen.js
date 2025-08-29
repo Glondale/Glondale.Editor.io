@@ -5,9 +5,9 @@ import EditorSidebar from './core/EditorSidebar.js';
 import ContextMenu from './core/ContextMenu.js';
 import SceneEditDialog from './dialogs/SceneEditDialog.js';
 import ChoiceEditDialog from './dialogs/ChoiceEditDialog.js';
-import AdvancedChoiceDialog from './dialogs/AdvancedChoiceDialog.js';
 import InventoryEditor from './InventoryEditor.js';
-import { EditorSessionStorage } from '../../engine/EditorSessionStorage.js';
+import EditorSessionStorage from '../../../engine/EditorSessionStorage.js';
+import AdvancedChoiceDialog from './dialogs/AdvancedChoiceDialog.js';
 
 const { useState, useEffect, useCallback, useRef } = React;
 
