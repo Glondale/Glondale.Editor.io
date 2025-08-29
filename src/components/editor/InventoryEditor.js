@@ -15,7 +15,7 @@
  * - ExportableDataManager: Item data export
  */
 
-import React, { useState, useCallback, useMemo, useEffect } from 'react';
+import React, { useState, useCallback, useMemo, useEffect } from 'https://esm.sh/react@18';
 
 export function InventoryEditor({ 
   items = [], 

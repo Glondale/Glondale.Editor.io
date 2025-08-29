@@ -16,7 +16,7 @@
  * - Editor dialogs: Scene and choice editing integration
  */
 
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo } from 'https://esm.sh/react@18';
 
 export function ConditionBuilder({ 
   conditions = [], 

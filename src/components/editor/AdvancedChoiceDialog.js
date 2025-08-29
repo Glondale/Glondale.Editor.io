@@ -15,7 +15,7 @@
  * - EditorScreen: Choice management integration
  */
 
-import React, { useState, useCallback, useMemo, useEffect } from 'react';
+import React, { useState, useCallback, useMemo, useEffect } from 'https://esm.sh/react@18';
 import { ConditionBuilder } from '../common/ConditionBuilder.js';
 
 export function AdvancedChoiceDialog({ 
