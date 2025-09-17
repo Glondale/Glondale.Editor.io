@@ -193,6 +193,113 @@ export class InventoryManager {
   }
 
   /**
+   * Set exact quantity for an inventory item
+   * @param {string} itemId - Item identifier
+   * @param {number} quantity - Desired quantity (defaults to 0)
+   * @returns {Object} { success, message, newQuantity }
+   */
+  setItemCount(itemId, quantity = 0) {
+    const currentEntry = this.inventory.get(itemId);
+    const currentQuantity = currentEntry ? currentEntry.quantity : 0;
+
+    if (quantity === undefined || quantity === null) {
+      quantity = 0;
+    }
+
+    if (typeof quantity !== 'number' || Number.isNaN(quantity)) {
+      return {
+        success: false,
+        message: 'Quantity must be a valid number',
+        newQuantity: currentQuantity
+      };
+    }
+
+    const normalizedQuantity = Math.floor(quantity);
+
+    if (normalizedQuantity < 0) {
+      return {
+        success: false,
+        message: 'Cannot set negative quantity',
+        newQuantity: currentQuantity
+      };
+    }
+
+    if (normalizedQuantity === currentQuantity) {
+      return {
+        success: true,
+        message: currentEntry
+          ? `${currentEntry.item.name} already at ${currentQuantity}`
+          : `${itemId} already at 0`,
+        newQuantity: currentQuantity
+      };
+    }
+
+    if (normalizedQuantity === 0) {
+      if (!currentEntry) {
+        return {
+          success: true,
+          message: `${itemId} already absent from inventory`,
+          newQuantity: 0
+        };
+      }
+
+      this.inventory.delete(itemId);
+      this.clearCaches();
+      this.updateStatsIntegration(itemId, -currentQuantity);
+
+      return {
+        success: true,
+        message: `Removed all ${currentEntry.item.name}`,
+        newQuantity: 0
+      };
+    }
+
+    const itemDef = currentEntry?.item || this.itemDefinitions.get(itemId);
+
+    if (!itemDef) {
+      return {
+        success: false,
+        message: `Unknown item: ${itemId}`,
+        newQuantity: currentQuantity
+      };
+    }
+
+    const clampedQuantity = Math.min(normalizedQuantity, itemDef.maxStack);
+    const quantityDelta = clampedQuantity - currentQuantity;
+
+    const updatedEntry = {
+      item: itemDef,
+      quantity: clampedQuantity,
+      acquiredAt: currentEntry?.acquiredAt || Date.now()
+    };
+
+    this.inventory.set(itemId, updatedEntry);
+    this.clearCaches();
+
+    if (quantityDelta !== 0) {
+      this.updateStatsIntegration(itemId, quantityDelta);
+    }
+
+    let message;
+
+    if (clampedQuantity !== normalizedQuantity) {
+      message = `Set ${itemDef.name} count to ${clampedQuantity} (clamped from ${normalizedQuantity})`;
+    } else if (!currentEntry) {
+      message = `Added ${clampedQuantity} ${itemDef.name}`;
+    } else if (quantityDelta > 0) {
+      message = `Increased ${itemDef.name} count to ${clampedQuantity}`;
+    } else {
+      message = `Reduced ${itemDef.name} count to ${clampedQuantity}`;
+    }
+
+    return {
+      success: true,
+      message,
+      newQuantity: clampedQuantity
+    };
+  }
+
+  /**
    * Check if inventory contains item
    * @param {string} itemId - Item identifier
    * @param {number} minQuantity - Minimum required quantity (default: 1)
