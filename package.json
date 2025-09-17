@@ -1,0 +1,8 @@
+{
+  "name": "glondale.editor.io",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/storyEngine.validateCurrentState.test.js"
+  }
+}
