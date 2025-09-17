@@ -222,6 +222,13 @@ export class StatsManager {
     return { ...this.flags };
   }
 
+  getAll() {
+    return {
+      stats: this.getAllStats(),
+      flags: this.getAllFlags()
+    };
+  }
+
   getStatDefinition(id) {
     return this.statDefinitions[id];
   }
