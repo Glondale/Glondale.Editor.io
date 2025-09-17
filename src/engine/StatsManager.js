@@ -62,6 +62,10 @@ export class StatsManager {
     this.inventoryManager = inventoryManager;
   }
 
+  hasStatDefinition(statId) {
+    return Object.prototype.hasOwnProperty.call(this.statDefinitions, statId);
+  }
+
   // Enhanced stat operations
   getStat(id) {
     return this.stats[id];

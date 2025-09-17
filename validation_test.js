@@ -1,6 +1,7 @@
 // Simple test to verify ValidationService functionality
 // This demonstrates all the key features implemented
 
+import './src/test/setupBrowserEnv.js';
 import { validationService } from './src/services/ValidationService.js';
 
 // Mock adventure with various validation scenarios
