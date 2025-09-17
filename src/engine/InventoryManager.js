@@ -193,6 +193,113 @@ export class InventoryManager {
   }
 
   /**
+   * Set exact quantity for an inventory item
+   * @param {string} itemId - Item identifier
+   * @param {number} quantity - Desired quantity (defaults to 0)
+   * @returns {Object} { success, message, newQuantity }
+   */
+  setItemCount(itemId, quantity = 0) {
+    const currentEntry = this.inventory.get(itemId);
+    const currentQuantity = currentEntry ? currentEntry.quantity : 0;
+
+    if (quantity === undefined || quantity === null) {
+      quantity = 0;
+    }
+
+    if (typeof quantity !== 'number' || Number.isNaN(quantity)) {
+      return {
+        success: false,
+        message: 'Quantity must be a valid number',
+        newQuantity: currentQuantity
+      };
+    }
+
+    const normalizedQuantity = Math.floor(quantity);
+
+    if (normalizedQuantity < 0) {
+      return {
+        success: false,
+        message: 'Cannot set negative quantity',
+        newQuantity: currentQuantity
+      };
+    }
+
+    if (normalizedQuantity === currentQuantity) {
+      return {
+        success: true,
+        message: currentEntry
+          ? `${currentEntry.item.name} already at ${currentQuantity}`
+          : `${itemId} already at 0`,
+        newQuantity: currentQuantity
+      };
+    }
+
+    if (normalizedQuantity === 0) {
+      if (!currentEntry) {
+        return {
+          success: true,
+          message: `${itemId} already absent from inventory`,
+          newQuantity: 0
+        };
+      }
+
+      this.inventory.delete(itemId);
+      this.clearCaches();
+      this.updateStatsIntegration(itemId, -currentQuantity);
+
+      return {
+        success: true,
+        message: `Removed all ${currentEntry.item.name}`,
+        newQuantity: 0
+      };
+    }
+
+    const itemDef = currentEntry?.item || this.itemDefinitions.get(itemId);
+
+    if (!itemDef) {
+      return {
+        success: false,
+        message: `Unknown item: ${itemId}`,
+        newQuantity: currentQuantity
+      };
+    }
+
+    const clampedQuantity = Math.min(normalizedQuantity, itemDef.maxStack);
+    const quantityDelta = clampedQuantity - currentQuantity;
+
+    const updatedEntry = {
+      item: itemDef,
+      quantity: clampedQuantity,
+      acquiredAt: currentEntry?.acquiredAt || Date.now()
+    };
+
+    this.inventory.set(itemId, updatedEntry);
+    this.clearCaches();
+
+    if (quantityDelta !== 0) {
+      this.updateStatsIntegration(itemId, quantityDelta);
+    }
+
+    let message;
+
+    if (clampedQuantity !== normalizedQuantity) {
+      message = `Set ${itemDef.name} count to ${clampedQuantity} (clamped from ${normalizedQuantity})`;
+    } else if (!currentEntry) {
+      message = `Added ${clampedQuantity} ${itemDef.name}`;
+    } else if (quantityDelta > 0) {
+      message = `Increased ${itemDef.name} count to ${clampedQuantity}`;
+    } else {
+      message = `Reduced ${itemDef.name} count to ${clampedQuantity}`;
+    }
+
+    return {
+      success: true,
+      message,
+      newQuantity: clampedQuantity
+    };
+  }
+
+  /**
    * Check if inventory contains item
    * @param {string} itemId - Item identifier
    * @param {number} minQuantity - Minimum required quantity (default: 1)
@@ -301,8 +408,8 @@ export class InventoryManager {
    */
   getInventoryByCategory(includeHidden = false) {
     const cacheKey = `category_${includeHidden}`;
-    
-    if (this.categoryCache.has(cacheKey) && this.displayCache && 
+
+    if (this.categoryCache.has(cacheKey) && this.displayCache &&
         Date.now() - this.lastCacheUpdate < 1000) {
       return this.categoryCache.get(cacheKey);
     }
@@ -351,8 +458,56 @@ export class InventoryManager {
 
     this.categoryCache.set(cacheKey, result);
     this.lastCacheUpdate = Date.now();
-    
+
     return result;
+  }
+
+  /**
+   * Return inventory items belonging to a category
+   * @param {string} category - Category identifier
+   * @param {boolean} includeHidden - Include hidden items (default: true)
+   * @returns {Array}
+   */
+  getItemsByCategory(category, includeHidden = true) {
+    if (!category) {
+      return [];
+    }
+
+    const categorized = this.getInventoryByCategory(includeHidden);
+    const categoryData = categorized.categories.get(category);
+
+    if (!categoryData) {
+      return [];
+    }
+
+    return categoryData.items.slice();
+  }
+
+  /**
+   * Get total number of items in inventory (counts quantities)
+   * @returns {number}
+   */
+  getTotalItemCount() {
+    const state = this.getInventoryState();
+    return state.totalItems || 0;
+  }
+
+  /**
+   * Get total weight of all items
+   * @returns {number}
+   */
+  getTotalWeight() {
+    const state = this.getInventoryState();
+    return state.totalWeight || 0;
+  }
+
+  /**
+   * Get total value of all items
+   * @returns {number}
+   */
+  getTotalValue() {
+    const state = this.getInventoryState();
+    return state.totalValue || 0;
   }
 
   /**
@@ -587,6 +742,10 @@ export class InventoryManager {
    */
   updateStatsIntegration(itemId, quantityChange) {
     // Update total item count stat if it exists
+    if (!this.statsManager || typeof this.statsManager.hasStatDefinition !== 'function') {
+      return;
+    }
+
     if (this.statsManager.hasStatDefinition('total_items')) {
       const currentTotal = this.statsManager.getStat('total_items') || 0;
       this.statsManager.setStat('total_items', Math.max(0, currentTotal + quantityChange));
