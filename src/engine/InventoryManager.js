@@ -635,6 +635,10 @@ export class InventoryManager {
    */
   updateStatsIntegration(itemId, quantityChange) {
     // Update total item count stat if it exists
+    if (!this.statsManager || typeof this.statsManager.hasStatDefinition !== 'function') {
+      return;
+    }
+
     if (this.statsManager.hasStatDefinition('total_items')) {
       const currentTotal = this.statsManager.getStat('total_items') || 0;
       this.statsManager.setStat('total_items', Math.max(0, currentTotal + quantityChange));

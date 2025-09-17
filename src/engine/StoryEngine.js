@@ -11,8 +11,9 @@ export class StoryEngine {
     this.adventure = null;
     this.currentScene = null;
     this.statsManager = new StatsManager();
-    this.inventoryManager = new InventoryManager();
-    this.conditionParser = new ConditionParser(this.statsManager, []);
+    this.inventoryManager = new InventoryManager(this.statsManager);
+    this.statsManager.setInventoryManager(this.inventoryManager);
+    this.conditionParser = new ConditionParser(this.statsManager, [], this.inventoryManager);
     this.choiceEvaluator = new ChoiceEvaluator(this.conditionParser, this.statsManager, this.inventoryManager);
     this.crossGameSaveSystem = new CrossGameSaveSystem();
     this.visitedScenes = [];
@@ -65,13 +66,15 @@ export class StoryEngine {
     
     this.adventure = adventure;
     this.statsManager = new StatsManager(adventure.stats || []);
-    
+    this.inventoryManager = new InventoryManager(this.statsManager);
+    this.statsManager.setInventoryManager(this.inventoryManager);
+
     // Initialize inventory with adventure items
     if (adventure.inventory && adventure.inventory.length > 0) {
       this.inventoryManager.initializeInventory(adventure.inventory);
       console.log('StoryEngine: Initialized inventory with', adventure.inventory.length, 'item types');
     }
-    
+
     this.conditionParser = new ConditionParser(this.statsManager, this.visitedScenes, this.inventoryManager);
     this.choiceEvaluator = new ChoiceEvaluator(this.conditionParser, this.statsManager, this.inventoryManager);
     
