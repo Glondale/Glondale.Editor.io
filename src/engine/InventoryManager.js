@@ -301,8 +301,8 @@ export class InventoryManager {
    */
   getInventoryByCategory(includeHidden = false) {
     const cacheKey = `category_${includeHidden}`;
-    
-    if (this.categoryCache.has(cacheKey) && this.displayCache && 
+
+    if (this.categoryCache.has(cacheKey) && this.displayCache &&
         Date.now() - this.lastCacheUpdate < 1000) {
       return this.categoryCache.get(cacheKey);
     }
@@ -351,8 +351,56 @@ export class InventoryManager {
 
     this.categoryCache.set(cacheKey, result);
     this.lastCacheUpdate = Date.now();
-    
+
     return result;
+  }
+
+  /**
+   * Return inventory items belonging to a category
+   * @param {string} category - Category identifier
+   * @param {boolean} includeHidden - Include hidden items (default: true)
+   * @returns {Array}
+   */
+  getItemsByCategory(category, includeHidden = true) {
+    if (!category) {
+      return [];
+    }
+
+    const categorized = this.getInventoryByCategory(includeHidden);
+    const categoryData = categorized.categories.get(category);
+
+    if (!categoryData) {
+      return [];
+    }
+
+    return categoryData.items.slice();
+  }
+
+  /**
+   * Get total number of items in inventory (counts quantities)
+   * @returns {number}
+   */
+  getTotalItemCount() {
+    const state = this.getInventoryState();
+    return state.totalItems || 0;
+  }
+
+  /**
+   * Get total weight of all items
+   * @returns {number}
+   */
+  getTotalWeight() {
+    const state = this.getInventoryState();
+    return state.totalWeight || 0;
+  }
+
+  /**
+   * Get total value of all items
+   * @returns {number}
+   */
+  getTotalValue() {
+    const state = this.getInventoryState();
+    return state.totalValue || 0;
   }
 
   /**
