@@ -694,13 +694,14 @@ export function AdvancedChoiceDialog({
 }
 
 // Simple action builder component
-function ActionBuilder({ actions = [], onActionsChange, availableStats = [], availableFlags = [], availableItems = [], availableAchievements = [], onInlineAddFlag = null, isOneTime = false, onToggleOneTime = () => {} }) {
+function ActionBuilder({ actions = [], onActionsChange, availableStats = [], availableFlags = [], availableItems = [], availableAchievements = [], onInlineAddFlag = null }) {
   const handleAddAction = React.useCallback(() => {
     const newAction = {
       id: generateActionId(),
       type: 'set_stat',
       key: availableStats[0]?.id || '',
-      value: 0
+      value: 0,
+      oneTime: false
     };
     onActionsChange([...actions, newAction]);
   }, [actions, onActionsChange, availableStats]);
@@ -720,17 +721,6 @@ function ActionBuilder({ actions = [], onActionsChange, availableStats = [], ava
   return React.createElement('div', {
     className: 'space-y-3'
   },
-    // One-time convenience toggle
-    React.createElement('div', { className: 'flex items-center justify-between p-3 bg-yellow-50 border border-yellow-200 rounded' }, [
-      React.createElement('label', { key: 'label', className: 'text-sm text-yellow-800 font-medium' }, 'One-time choice (disable after first use)'),
-      React.createElement('input', {
-        key: 'checkbox',
-        type: 'checkbox',
-        checked: !!isOneTime,
-        onChange: (e) => onToggleOneTime(e.target.checked),
-        className: 'w-4 h-4'
-      })
-    ]),
     React.createElement('div', {
       className: 'flex justify-between items-center'
     },
@@ -848,6 +838,16 @@ function ActionBuilder({ actions = [], onActionsChange, availableStats = [], ava
                 onChange: (e) => handleActionUpdate(index, { value: Number(e.target.value) }),
                 className: 'w-20 px-2 py-1 border rounded text-sm'
               }) : null,
+
+            // Per-action one-time toggle
+            React.createElement('label', { className: 'ml-auto flex items-center gap-1 text-xs text-yellow-800 bg-yellow-50 px-2 py-1 rounded border border-yellow-200' }, [
+              React.createElement('input', {
+                type: 'checkbox',
+                checked: !!action.oneTime,
+                onChange: (e) => handleActionUpdate(index, { oneTime: e.target.checked })
+              }),
+              'One-time'
+            ]),
 
             React.createElement('button', {
               onClick: () => handleActionDelete(index),

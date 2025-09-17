@@ -20,6 +20,7 @@ export class StoryEngine {
     this.choiceHistory = [];
     this.secretsDiscovered = [];
     this.secretChoicesAvailable = new Set(); // Track which secret choices are permanently unlocked
+  this.executedActions = new Set(); // Track one-time actions executed (by action.id)
     
     // Validation integration
     this.validationService = validationService;
@@ -285,6 +286,14 @@ export class StoryEngine {
     console.log('StoryEngine: Executing', actions.length, 'actions');
 
     actions.forEach(action => {
+      // Per-action one-time enforcement
+      if (action && action.oneTime && action.id) {
+        if (this.executedActions.has(action.id)) {
+          console.log('StoryEngine: Skipping one-time action already executed:', action.id);
+          return;
+        }
+      }
+
       console.log('StoryEngine: Executing action:', action.type, action.key, action.value);
       
       switch (action.type) {
@@ -358,6 +367,11 @@ export class StoryEngine {
         }
         default:
           console.warn('StoryEngine: Unknown action type:', action.type);
+      }
+
+      // Mark one-time action as executed
+      if (action && action.oneTime && action.id) {
+        this.executedActions.add(action.id);
       }
     });
 

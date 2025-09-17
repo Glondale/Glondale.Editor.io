@@ -88,8 +88,9 @@ export default function SceneEditDialog({
     const newAction = {
       id: `action_${Date.now()}`,
       type: 'set_stat',
-      key: '',
-      value: '',
+      key: adventureStats[0]?.id || '',
+      value: 0,
+      oneTime: false,
       conditions: [],
       probability: 1.0,
       description: ''
@@ -279,7 +280,7 @@ export default function SceneEditDialog({
               React.createElement('option', { key: option.value, value: option.value }, option.label)
             )),
 
-            // Key input: dropdown for stats/flags depending on type
+            // Key dropdowns for flags/stats/items/achievements
             (action.type === 'set_flag' || action.type === 'toggle_flag') ?
               React.createElement('div', { key: 'action-flag-key', className: 'col-span-4 flex items-center gap-2' }, [
                 React.createElement('select', {
@@ -304,17 +305,28 @@ export default function SceneEditDialog({
                   title: 'Create a new flag'
                 }, '+ Add Flag')
               ])
-            :
-              React.createElement('input', {
-                key: 'action-key',
-                type: 'text',
+            : (action.type === 'add_inventory' || action.type === 'remove_inventory' || action.type === 'set_inventory') ?
+              React.createElement('select', {
+                key: 'item-select',
                 value: action.key || '',
                 onChange: (e) => updateAction(actionType, action.id, { key: e.target.value }),
-                placeholder: 'Target name',
                 className: 'col-span-4 px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500'
-              }),
+              }, [
+                React.createElement('option', { key: 'empty', value: '' }, 'Select item...'),
+                ...adventureInventory.map(item => React.createElement('option', { key: item.id, value: item.id }, item.name || item.id))
+              ])
+            :
+              React.createElement('select', {
+                key: 'stat-select',
+                value: action.key || '',
+                onChange: (e) => updateAction(actionType, action.id, { key: e.target.value }),
+                className: 'col-span-4 px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500'
+              }, [
+                React.createElement('option', { key: 'empty', value: '' }, 'Select stat...'),
+                ...adventureStats.map(s => React.createElement('option', { key: s.id, value: s.id }, s.name || s.id))
+              ]),
 
-            (action.type === 'set_flag' || action.type === 'toggle_flag') ?
+            (action.type === 'set_flag') ?
               React.createElement('select', {
                 key: 'action-flag-value',
                 value: String(Boolean(action.value)),
@@ -324,15 +336,18 @@ export default function SceneEditDialog({
                 React.createElement('option', { key: 'true', value: 'true' }, 'True'),
                 React.createElement('option', { key: 'false', value: 'false' }, 'False')
               ])
-            :
+            : (action.type === 'toggle_flag') ?
+              React.createElement('div', { key: 'no-value', className: 'col-span-3 text-xs text-gray-500' }, 'No value')
+            : (action.type === 'set_stat' || action.type === 'add_stat' || action.type === 'multiply_stat' || action.type === 'set_inventory' || action.type === 'add_inventory' || action.type === 'remove_inventory') ?
               React.createElement('input', {
                 key: 'action-value',
-                type: 'text',
-                value: action.value || '',
-                onChange: (e) => updateAction(actionType, action.id, { value: e.target.value }),
+                type: 'number',
+                value: action.value ?? 0,
+                onChange: (e) => updateAction(actionType, action.id, { value: Number(e.target.value) }),
                 placeholder: 'Value',
                 className: 'col-span-3 px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500'
-              }),
+              })
+            : React.createElement('div', { key: 'no-value2', className: 'col-span-3 text-xs text-gray-500' }, '—'),
 
             React.createElement('div', {
               key: 'action-controls',
@@ -347,6 +362,10 @@ export default function SceneEditDialog({
                 className: 'px-2 py-1 text-xs bg-blue-100 text-blue-700 rounded hover:bg-blue-200',
                 title: 'Edit Conditions'
               }, 'C'),
+              React.createElement('label', { key: 'one-time', className: 'flex items-center gap-1 text-xs text-yellow-800 bg-yellow-50 px-2 py-1 rounded border border-yellow-200' }, [
+                React.createElement('input', { type: 'checkbox', checked: !!action.oneTime, onChange: (e) => updateAction(actionType, action.id, { oneTime: e.target.checked }) }),
+                'One-time'
+              ]),
               React.createElement('button', {
                 key: 'remove-action',
                 onClick: () => removeAction(actionType, action.id),
