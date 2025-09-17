@@ -193,6 +193,109 @@ export class InventoryManager {
   }
 
   /**
+   * Set exact quantity for an inventory item
+   * @param {string} itemId - Item identifier
+   * @param {number} quantity - Desired quantity (will be clamped to valid range)
+   * @returns {Object} { success, message, newQuantity }
+   */
+  setItemCount(itemId, quantity = 0) {
+    const currentEntry = this.inventory.get(itemId);
+    const currentQuantity = currentEntry ? currentEntry.quantity : 0;
+
+    if (quantity === null || quantity === undefined) {
+      quantity = 0;
+    }
+
+    if (typeof quantity !== 'number' || Number.isNaN(quantity)) {
+      return {
+        success: false,
+        message: 'Quantity must be a valid number',
+        newQuantity: currentQuantity
+      };
+    }
+
+    if (!Number.isInteger(quantity)) {
+      quantity = Math.floor(quantity);
+    }
+
+    if (quantity < 0) {
+      return {
+        success: false,
+        message: 'Cannot set negative quantity',
+        newQuantity: currentQuantity
+      };
+    }
+
+    if (quantity === currentQuantity) {
+      return {
+        success: true,
+        message: currentEntry
+          ? `${currentEntry.item.name} already at ${currentQuantity}`
+          : `${itemId} already at 0`,
+        newQuantity: currentQuantity
+      };
+    }
+
+    if (quantity === 0) {
+      if (currentEntry) {
+        this.inventory.delete(itemId);
+        this.clearCaches();
+        this.updateStatsIntegration(itemId, -currentQuantity);
+        return {
+          success: true,
+          message: `Removed all ${currentEntry.item.name}`,
+          newQuantity: 0
+        };
+      }
+
+      return {
+        success: true,
+        message: `${itemId} already absent from inventory`,
+        newQuantity: 0
+      };
+    }
+
+    const itemDef = currentEntry?.item || this.itemDefinitions.get(itemId);
+
+    if (!itemDef) {
+      return {
+        success: false,
+        message: `Unknown item: ${itemId}`,
+        newQuantity: currentQuantity
+      };
+    }
+
+    let finalQuantity = quantity;
+    let truncated = false;
+
+    if (itemDef.maxStack && quantity > itemDef.maxStack) {
+      finalQuantity = itemDef.maxStack;
+      truncated = true;
+    }
+
+    this.inventory.set(itemId, {
+      item: itemDef,
+      quantity: finalQuantity,
+      acquiredAt: currentEntry?.acquiredAt || Date.now()
+    });
+
+    const quantityChange = finalQuantity - currentQuantity;
+
+    if (quantityChange !== 0) {
+      this.clearCaches();
+      this.updateStatsIntegration(itemId, quantityChange);
+    }
+
+    return {
+      success: true,
+      message: truncated
+        ? `Set ${itemDef.name} count to max stack of ${itemDef.maxStack}`
+        : `Set ${itemDef.name} count to ${finalQuantity}`,
+      newQuantity: finalQuantity
+    };
+  }
+
+  /**
    * Check if inventory contains item
    * @param {string} itemId - Item identifier
    * @param {number} minQuantity - Minimum required quantity (default: 1)
@@ -587,10 +690,29 @@ export class InventoryManager {
    */
   updateStatsIntegration(itemId, quantityChange) {
     // Update total item count stat if it exists
-    if (this.statsManager.hasStatDefinition('total_items')) {
-      const currentTotal = this.statsManager.getStat('total_items') || 0;
-      this.statsManager.setStat('total_items', Math.max(0, currentTotal + quantityChange));
+    if (!this.statsManager) {
+      return;
     }
+
+    let hasTotalItemsStat = false;
+
+    if (typeof this.statsManager.hasStatDefinition === 'function') {
+      hasTotalItemsStat = this.statsManager.hasStatDefinition('total_items');
+    } else {
+      hasTotalItemsStat = Object.prototype.hasOwnProperty.call(
+        this.statsManager.statDefinitions || {},
+        'total_items'
+      );
+    }
+
+    if (!hasTotalItemsStat ||
+        typeof this.statsManager.getStat !== 'function' ||
+        typeof this.statsManager.setStat !== 'function') {
+      return;
+    }
+
+    const currentTotal = this.statsManager.getStat('total_items') || 0;
+    this.statsManager.setStat('total_items', Math.max(0, currentTotal + quantityChange));
   }
 
   /**

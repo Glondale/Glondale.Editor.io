@@ -279,7 +279,7 @@ export class StoryEngine {
     
     actions.forEach(action => {
       console.log('StoryEngine: Executing action:', action.type, action.key, action.value);
-      
+
       switch (action.type) {
         case 'set_stat':
           this.statsManager.setStat(action.key, action.value);
@@ -290,18 +290,36 @@ export class StoryEngine {
         case 'set_flag':
           this.statsManager.setFlag(action.key, action.value);
           break;
-        case 'add_inventory':
-          this.inventoryManager.addItem(action.key, action.value || 1);
-          console.log(`StoryEngine: Added ${action.value || 1}x ${action.key} to inventory`);
+        case 'add_inventory': {
+          const quantity = typeof action.value === 'number' ? action.value : 1;
+          const result = this.inventoryManager.addItem(action.key, quantity);
+          if (result?.success) {
+            console.log(`StoryEngine: ${result.message}`);
+          } else if (result) {
+            console.warn(`StoryEngine: Failed to add ${action.key}: ${result.message}`);
+          }
           break;
-        case 'remove_inventory':
-          this.inventoryManager.removeItem(action.key, action.value || 1);
-          console.log(`StoryEngine: Removed ${action.value || 1}x ${action.key} from inventory`);
+        }
+        case 'remove_inventory': {
+          const quantity = typeof action.value === 'number' ? action.value : 1;
+          const result = this.inventoryManager.removeItem(action.key, quantity);
+          if (result?.success) {
+            console.log(`StoryEngine: ${result.message}`);
+          } else if (result) {
+            console.warn(`StoryEngine: Failed to remove ${action.key}: ${result.message}`);
+          }
           break;
-        case 'set_inventory':
-          this.inventoryManager.setItemCount(action.key, action.value || 0);
-          console.log(`StoryEngine: Set ${action.key} count to ${action.value || 0}`);
+        }
+        case 'set_inventory': {
+          const quantity = typeof action.value === 'number' ? action.value : 0;
+          const result = this.inventoryManager.setItemCount(action.key, quantity);
+          if (result?.success) {
+            console.log(`StoryEngine: ${result.message}`);
+          } else if (result) {
+            console.warn(`StoryEngine: Failed to set inventory for ${action.key}: ${result.message}`);
+          }
           break;
+        }
         default:
           console.warn('StoryEngine: Unknown action type:', action.type);
       }
