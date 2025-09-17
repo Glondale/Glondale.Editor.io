@@ -7,6 +7,8 @@ export class StatsManager {
     this.inventoryManager = null;
     this.statChangeHistory = [];
     this.customStatTypes = new Map();
+    // Incremented whenever stats or flags change so dependent caches can invalidate
+    this._version = 0;
     
     // Initialize default custom stat types
     this.registerCustomStatType('percentage', {
@@ -32,6 +34,16 @@ export class StatsManager {
     });
     
     this.initializeStats(statDefs);
+  }
+
+  // Internal: bump version when any stat/flag changes
+  _bumpVersion() {
+    this._version++;
+  }
+
+  // Expose a monotonic version number for cache invalidation
+  getVersion() {
+    return this._version;
   }
 
   // Register custom stat type
@@ -99,7 +111,7 @@ export class StatsManager {
       }
     }
     
-    this.stats[id] = newValue;
+  this.stats[id] = newValue;
     
     // Record change history for analytics
     if (recordHistory && oldValue !== newValue) {
@@ -112,6 +124,7 @@ export class StatsManager {
           ? newValue - oldValue 
           : null
       });
+      this._bumpVersion();
     }
     
     return true;
@@ -152,6 +165,7 @@ export class StatsManager {
         timestamp: Date.now(),
         change: null
       });
+      this._bumpVersion();
     }
   }
 
@@ -253,6 +267,7 @@ export class StatsManager {
     
     // Clear change history on load
     this.statChangeHistory = [];
+    this._bumpVersion();
   }
 
   // Get visible stats for UI with enhanced display
@@ -419,6 +434,7 @@ export class StatsManager {
     });
     this.flags = {};
     this.statChangeHistory = [];
+    this._version = 0;
     
     if (this.inventoryManager) {
       this.inventoryManager.clearInventory();

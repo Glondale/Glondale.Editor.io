@@ -14,7 +14,8 @@ export default function SceneEditDialog({
   availableScenes = [],
   onSave = () => {},
   onCancel = () => {},
-  onDelete = () => {}
+  onDelete = () => {},
+  onInlineAddFlag = null
 }) {
   const [formData, setFormData] = useState({
     title: '',
@@ -278,26 +279,60 @@ export default function SceneEditDialog({
               React.createElement('option', { key: option.value, value: option.value }, option.label)
             )),
 
-            React.createElement('input', {
-              key: 'action-key',
-              type: 'text',
-              value: action.key || '',
-              onChange: (e) => updateAction(actionType, action.id, { key: e.target.value }),
-              placeholder: 'Target name',
-              className: 'col-span-4 px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500'
-            }),
-
-            React.createElement('input', {
-              key: 'action-value',
-              type: ['set_flag', 'toggle_flag'].includes(action.type) ? 'checkbox' : 'text',
-              value: ['set_flag', 'toggle_flag'].includes(action.type) ? undefined : (action.value || ''),
-              checked: ['set_flag', 'toggle_flag'].includes(action.type) ? action.value : undefined,
-              onChange: (e) => updateAction(actionType, action.id, { 
-                value: ['set_flag', 'toggle_flag'].includes(action.type) ? e.target.checked : e.target.value 
+            // Key input: dropdown for stats/flags depending on type
+            (action.type === 'set_flag' || action.type === 'toggle_flag') ?
+              React.createElement('div', { key: 'action-flag-key', className: 'col-span-4 flex items-center gap-2' }, [
+                React.createElement('select', {
+                  key: 'flag-select',
+                  value: action.key || '',
+                  onChange: (e) => updateAction(actionType, action.id, { key: e.target.value }),
+                  className: 'flex-1 px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500'
+                }, [
+                  React.createElement('option', { key: 'empty', value: '' }, 'Select flag...'),
+                  ...adventureFlags.map(f => React.createElement('option', { key: f.id, value: f.id }, f.name || f.id))
+                ]),
+                React.createElement('button', {
+                  key: 'add-flag-inline',
+                  className: 'px-2 py-1 text-xs bg-green-100 text-green-700 rounded hover:bg-green-200',
+                  onClick: () => {
+                    if (typeof onInlineAddFlag === 'function') {
+                      onInlineAddFlag((newFlag) => {
+                        updateAction(actionType, action.id, { key: newFlag.id });
+                      });
+                    }
+                  },
+                  title: 'Create a new flag'
+                }, '+ Add Flag')
+              ])
+            :
+              React.createElement('input', {
+                key: 'action-key',
+                type: 'text',
+                value: action.key || '',
+                onChange: (e) => updateAction(actionType, action.id, { key: e.target.value }),
+                placeholder: 'Target name',
+                className: 'col-span-4 px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500'
               }),
-              placeholder: 'Value',
-              className: `col-span-3 px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500`
-            }),
+
+            (action.type === 'set_flag' || action.type === 'toggle_flag') ?
+              React.createElement('select', {
+                key: 'action-flag-value',
+                value: String(Boolean(action.value)),
+                onChange: (e) => updateAction(actionType, action.id, { value: e.target.value === 'true' }),
+                className: 'col-span-3 px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500'
+              }, [
+                React.createElement('option', { key: 'true', value: 'true' }, 'True'),
+                React.createElement('option', { key: 'false', value: 'false' }, 'False')
+              ])
+            :
+              React.createElement('input', {
+                key: 'action-value',
+                type: 'text',
+                value: action.value || '',
+                onChange: (e) => updateAction(actionType, action.id, { value: e.target.value }),
+                placeholder: 'Value',
+                className: 'col-span-3 px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500'
+              }),
 
             React.createElement('div', {
               key: 'action-controls',
@@ -812,6 +847,7 @@ export default function SceneEditDialog({
       availableStats: adventureStats,
       availableFlags: adventureFlags,
       availableItems: adventureInventory,
+      onInlineAddFlag,
       onSave: saveConditions,
       onCancel: () => {
         setShowConditionBuilder(false);

@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "test": "node --test tests/storyEngine.validateCurrentState.test.js"
+    "test": "node --test tests/storyEngine.validateCurrentState.test.js",
+    "setup:hooks": "git config core.hooksPath .githooks && chmod +x .githooks/pre-commit"
   }
 }

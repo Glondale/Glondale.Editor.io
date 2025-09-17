@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Block commits that change code without updating .github/copilot-instructions.md
+
+set -euo pipefail
+
+# files staged for commit
+STAGED=$(git diff --cached --name-only)
+
+# If nothing staged, allow
+if [[ -z "$STAGED" ]]; then
+  exit 0
+fi
+
+# Determine if substantive code changed
+if echo "$STAGED" | grep -qE '^(src/|tests/|test/|index.html|package.json|validation_test.js|editor/|engine/|components/|hooks/|services/|types/|utils/)' ; then
+  # Require copilot-instructions update
+  if echo "$STAGED" | grep -q '^.github/copilot-instructions.md$' ; then
+    exit 0
+  fi
+  echo "\n✋ Commit blocked: You modified code but did not update .github/copilot-instructions.md."
+  echo "   Please document your changes and add it to this commit."
+  exit 1
+fi
+
+# Otherwise, allow commit
+exit 0

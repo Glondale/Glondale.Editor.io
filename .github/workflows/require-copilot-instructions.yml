@@ -1,0 +1,50 @@
+name: Require Copilot Instructions Update
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+jobs:
+  check-doc-updated:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine changed files
+        id: diff
+        run: |
+          base_sha="${{ github.event.pull_request.base.sha }}"
+          head_sha="${{ github.event.pull_request.head.sha }}"
+          echo "Base: $base_sha"
+          echo "Head: $head_sha"
+          # list changed files between base and head
+          git diff --name-only "$base_sha" "$head_sha" > changed_files.txt
+          echo "Changed files:" && cat changed_files.txt
+
+      - name: Check if docs were updated
+        id: check
+        run: |
+          # If only documentation or workflows changed, skip
+          if ! grep -qE '^(src/|tests/|test/|index.html|package.json|validation_test.js|editor/|engine/|components/|hooks/|services/|types/|utils/)' changed_files.txt; then
+            echo "No substantive code changes detected. Skipping doc requirement."
+            echo "should_fail=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          if grep -q '^.github/copilot-instructions.md$' changed_files.txt; then
+            echo "Copilot instructions updated."
+            echo "should_fail=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "Copilot instructions were NOT updated alongside code changes."
+          echo "should_fail=true" >> $GITHUB_OUTPUT
+
+      - name: Fail if missing update
+        if: steps.check.outputs.should_fail == 'true'
+        run: |
+          echo "Please update .github/copilot-instructions.md to reflect your changes."
+          exit 1

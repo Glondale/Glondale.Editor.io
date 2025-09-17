@@ -262,7 +262,7 @@ export function ChoiceList({
         choice,
         index: actualIndex + 1,
         onSelect: () => onChoiceSelect(choice.id),
-        disabled: disabled || choice.evaluation?.state === 'LOCKED',
+  disabled: disabled || (choice.evaluation && choice.evaluation.isSelectable === false) || choice.evaluation?.state === 'LOCKED',
         isAnimating: animatingChoices.has(choice.id),
         isNewlyDiscovered: newlyDiscovered.has(choice.id),
         // Enhanced virtual styling with performance optimizations

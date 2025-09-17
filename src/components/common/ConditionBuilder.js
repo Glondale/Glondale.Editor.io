@@ -26,7 +26,8 @@ export default function ConditionBuilder({
   availableItems = [],
   availableScenes = [],
   className = '',
-  disabled = false 
+  disabled = false,
+  onInlineAddFlag = null 
 }) {
   const [draggedItem, setDraggedItem] = useState(null);
   const [selectedCondition, setSelectedCondition] = useState(null);
@@ -315,7 +316,7 @@ function ConditionItem({
       case 'stat':
         return availableStats.map(stat => ({ value: stat.id, label: stat.name }));
       case 'flag':
-        return availableFlags.map(flag => ({ value: flag.id, label: flag.name }));
+        return availableFlags.map(flag => ({ value: flag.id, label: flag.name || flag.id }));
       case 'inventory':
         return [
           { value: 'has_item', label: 'Has Item' },
@@ -406,27 +407,56 @@ function ConditionItem({
           React.createElement('label', {
             className: 'block text-sm font-medium text-gray-700 mb-1'
           }, 'Property'),
-          availableKeys.length > 0 ?
-            React.createElement('select', {
-              value: condition.key,
-              onChange: (e) => onUpdate({ key: e.target.value }),
-              className: 'w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500'
-            },
-              React.createElement('option', { value: '' }, 'Select...'),
-              availableKeys.map(key =>
-                React.createElement('option', { 
-                  key: key.value, 
-                  value: key.value 
-                }, key.label)
+          condition.type === 'flag' && availableKeys.length > 0 ?
+            React.createElement('div', { className: 'flex items-center gap-2' }, [
+              React.createElement('select', {
+                key: 'flag-select',
+                value: condition.key,
+                onChange: (e) => onUpdate({ key: e.target.value }),
+                className: 'flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500'
+              },
+                React.createElement('option', { value: '' }, 'Select...'),
+                availableKeys.map(key =>
+                  React.createElement('option', { 
+                    key: key.value, 
+                    value: key.value 
+                  }, key.label)
+                )
+              ),
+              React.createElement('button', {
+                key: 'add-flag-inline',
+                type: 'button',
+                className: 'px-2 py-1 text-xs bg-green-100 text-green-700 rounded hover:bg-green-200',
+                onClick: () => {
+                  if (typeof onInlineAddFlag === 'function') {
+                    onInlineAddFlag((newFlag) => onUpdate({ key: newFlag.id }));
+                  }
+                },
+                title: 'Create a new flag'
+              }, '+ Add Flag')
+            ])
+          : availableKeys.length > 0 ?
+              React.createElement('select', {
+                value: condition.key,
+                onChange: (e) => onUpdate({ key: e.target.value }),
+                className: 'w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500'
+              },
+                React.createElement('option', { value: '' }, 'Select...'),
+                availableKeys.map(key =>
+                  React.createElement('option', { 
+                    key: key.value, 
+                    value: key.value 
+                  }, key.label)
+                )
               )
-            ) :
-            React.createElement('input', {
-              type: 'text',
-              value: condition.key,
-              onChange: (e) => onUpdate({ key: e.target.value }),
-              placeholder: 'Enter property name',
-              className: 'w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500'
-            })
+            :
+              React.createElement('input', {
+                type: 'text',
+                value: condition.key,
+                onChange: (e) => onUpdate({ key: e.target.value }),
+                placeholder: 'Enter property name',
+                className: 'w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500'
+              })
         ),
 
         // Operator selection

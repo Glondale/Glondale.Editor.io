@@ -8,6 +8,9 @@ import React, { useState } from "https://esm.sh/react@18";
 export default function EditorSidebar({
   selectedNode = null,
   adventureStats = [],
+  adventureInventory = [],
+  adventureAchievements = [],
+  adventureFlags = [],
   availableScenes = [],
   onNodeUpdate = () => {},
   onChoiceAdd = () => {},
@@ -18,9 +21,12 @@ export default function EditorSidebar({
   onStatDelete = () => {},
   onOpenSceneDialog = () => {},
   onOpenChoiceDialog = () => {},
+  onOpenInventoryEditor = () => {},
+  onOpenAchievementsEditor = () => {},
+  onOpenFlagsEditor = () => {},
   className = ''
 }) {
-  const [activeTab, setActiveTab] = useState('scene'); // 'scene' or 'stats'
+  const [activeTab, setActiveTab] = useState('scene'); // 'scene' or 'data'
   const [expandedSections, setExpandedSections] = useState({
     choices: true,
     actions: false
@@ -212,80 +218,17 @@ export default function EditorSidebar({
     ]);
   };
 
-  const renderStatsManager = () => {
-    return React.createElement('div', {
-      className: 'p-4 space-y-4'
-    }, [
-      React.createElement('div', {
-        key: 'stats-header',
-        className: 'flex items-center justify-between'
-      }, [
-        React.createElement('h3', {
-          key: 'stats-title',
-          className: 'font-medium text-gray-900'
-        }, 'Adventure Stats'),
-        React.createElement(Button, {
-          key: 'add-stat-btn',
-          onClick: onStatAdd,
-          variant: 'primary',
-          size: 'xs'
-        }, '+ Add')
+  const renderDataManager = () => {
+    // Vertical stack of data managers similar to other tool entry points
+    return React.createElement('div', { className: 'p-4 space-y-3' }, [
+      React.createElement('h3', { key: 'data-title', className: 'font-medium text-gray-900' }, 'Data'),
+      React.createElement('div', { key: 'tools', className: 'flex flex-col gap-2' }, [
+        React.createElement(Button, { key: 'flags-btn', onClick: onOpenFlagsEditor, variant: 'secondary', size: 'sm', className: 'w-full justify-start' }, '🏁 Flags'),
+        React.createElement(Button, { key: 'inventory-btn', onClick: onOpenInventoryEditor, variant: 'secondary', size: 'sm', className: 'w-full justify-start' }, '📦 Inventory'),
+        React.createElement(Button, { key: 'achievements-btn', onClick: onOpenAchievementsEditor, variant: 'secondary', size: 'sm', className: 'w-full justify-start' }, '🏆 Achievements'),
+  React.createElement(Button, { key: 'stats-btn', onClick: onStatAdd, variant: 'primary', size: 'sm', className: 'w-full justify-start' }, '📊 Stats')
       ]),
-
-      React.createElement('div', {
-        key: 'stats-list',
-        className: 'space-y-2'
-      }, adventureStats.map((stat, index) =>
-        React.createElement('div', {
-          key: stat.id || index,
-          className: 'p-3 bg-gray-50 rounded border border-gray-200'
-        }, [
-          React.createElement('div', {
-            key: 'stat-header',
-            className: 'flex items-center justify-between mb-2'
-          }, [
-            React.createElement('span', {
-              key: 'stat-name',
-              className: 'font-medium text-sm text-gray-800'
-            }, stat.name || 'Unnamed Stat'),
-            React.createElement('button', {
-              key: 'delete-stat-btn',
-              onClick: () => onStatDelete(stat.id),
-              className: 'text-xs text-red-600 hover:text-red-800'
-            }, '×')
-          ]),
-          React.createElement('div', {
-            key: 'stat-details',
-            className: 'text-xs text-gray-600 space-y-1'
-          }, [
-            React.createElement('div', {
-              key: 'stat-type'
-            }, `Type: ${stat.type || 'number'}`),
-            React.createElement('div', {
-              key: 'stat-default'
-            }, `Default: ${stat.defaultValue ?? 0}`),
-            stat.min !== undefined && React.createElement('div', {
-              key: 'stat-min'
-            }, `Min: ${stat.min}`),
-            stat.max !== undefined && React.createElement('div', {
-              key: 'stat-max'
-            }, `Max: ${stat.max}`)
-          ])
-        ])
-      )),
-
-      adventureStats.length === 0 && React.createElement('div', {
-        key: 'no-stats',
-        className: 'text-center text-gray-500 text-sm py-8'
-      }, [
-        React.createElement('div', {
-          key: 'no-stats-icon',
-          className: 'text-2xl mb-2'
-        }, '📊'),
-        React.createElement('div', {
-          key: 'no-stats-text'
-        }, 'No stats defined yet')
-      ])
+      React.createElement('div', { key: 'hint', className: 'text-xs text-gray-500' }, 'Tip: Use these to manage data in dedicated editors.')
     ]);
   };
 
@@ -307,20 +250,20 @@ export default function EditorSidebar({
         }`
       }, 'Scene'),
       React.createElement('button', {
-        key: 'stats-tab',
-        onClick: () => setActiveTab('stats'),
+        key: 'data-tab',
+        onClick: () => setActiveTab('data'),
         className: `flex-1 px-4 py-2 text-sm font-medium transition-colors ${
-          activeTab === 'stats' 
+          activeTab === 'data' 
             ? 'bg-blue-50 text-blue-700 border-b-2 border-blue-500' 
             : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
         }`
-      }, 'Stats')
+      }, 'Data')
     ]),
 
     // Tab content
     React.createElement('div', {
       key: 'tab-content',
       className: 'flex-1 overflow-y-auto'
-    }, activeTab === 'scene' ? renderSceneProperties() : renderStatsManager())
+    }, activeTab === 'scene' ? renderSceneProperties() : renderDataManager())
   ]);
 }

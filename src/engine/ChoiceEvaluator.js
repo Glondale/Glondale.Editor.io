@@ -22,6 +22,7 @@ export class ChoiceEvaluator {
     this.evaluationCache = new Map();
     this.visitedScenes = [];
     this.choiceHistory = [];
+    this._lastStatsVersion = this.statsManager?.getVersion?.() || 0;
   }
 
   // Allow StoryEngine to update visited scenes (compatibility)
@@ -43,6 +44,12 @@ export class ChoiceEvaluator {
    * @returns {Object} { isVisible, isSelectable, reason, type }
    */
   evaluateChoice(choice, discoveredSecrets = []) {
+    // Invalidate cache when stats/flags have changed
+    const currentVersion = this.statsManager?.getVersion?.() || 0;
+    if (currentVersion !== this._lastStatsVersion) {
+      this.clearCache();
+      this._lastStatsVersion = currentVersion;
+    }
     // Cache key for performance
     const cacheKey = this.generateCacheKey(choice, discoveredSecrets);
     if (this.evaluationCache.has(cacheKey)) {
@@ -50,6 +57,26 @@ export class ChoiceEvaluator {
     }
 
     const result = this._performEvaluation(choice, discoveredSecrets);
+
+    // Enforce usage limits (one-time, maxUses, cooldown) on selectable results
+    if (result && result.isSelectable) {
+      const usageLock = this._applyUsageLimits(choice);
+      if (usageLock) {
+        // Override selectability due to usage restrictions
+        result.isSelectable = false;
+        result.type = 'LOCKED';
+        result.state = 'LOCKED';
+        // Merge/append reasons
+        const reasons = [];
+        if (Array.isArray(result.lockReasons)) reasons.push(...result.lockReasons);
+        if (usageLock.reason) reasons.push(usageLock.reason);
+        if (reasons.length > 0) result.lockReasons = reasons;
+        // Expose cooldown remaining for UI if present
+        if (usageLock.cooldownRemainingMs != null) {
+          result.cooldownRemainingMs = usageLock.cooldownRemainingMs;
+        }
+      }
+    }
 
     // Backwards-compatibility: some callers expect `evaluation.state`; mirror `type` to `state` when missing
     if (!result.state && result.type) {
@@ -89,6 +116,51 @@ export class ChoiceEvaluator {
       state: 'VISIBLE',
       reason: null
     };
+  }
+
+  /**
+   * Enforce per-choice usage limits and cooldowns.
+   * Returns null if selectable, or an object { reason, cooldownRemainingMs? } when locked.
+   * @private
+   */
+  _applyUsageLimits(choice) {
+    if (!choice) return null;
+
+    const now = Date.now();
+    const history = Array.isArray(this.choiceHistory) ? this.choiceHistory : [];
+
+    // Count how many times this choice has been made
+    const records = history.filter(h => h && h.choiceId === choice.id);
+    const timesUsed = records.length;
+
+    // One-time or maxUses limit
+    const oneTime = !!choice.oneTime;
+    const maxUses = typeof choice.maxUses === 'number' ? choice.maxUses : 0; // 0 = unlimited
+    const allowed = oneTime ? 1 : (maxUses > 0 ? maxUses : Infinity);
+    if (timesUsed >= allowed) {
+      const remaining = Math.max(0, allowed - timesUsed);
+      const reason = oneTime
+        ? 'This choice can only be used once'
+        : 'No uses remaining for this choice';
+      return { reason: remaining > 0 ? `${reason} (${remaining} left)` : reason };
+    }
+
+    // Cooldown check (milliseconds). If set and used before, enforce delay
+    const cooldownMs = typeof choice.cooldown === 'number' ? choice.cooldown : 0;
+    if (cooldownMs > 0 && records.length > 0) {
+      const lastUse = records[records.length - 1];
+      const elapsed = now - (lastUse.timestamp || 0);
+      const remainingMs = cooldownMs - elapsed;
+      if (remainingMs > 0) {
+        const secs = Math.ceil(remainingMs / 1000);
+        return {
+          reason: `On cooldown (${secs}s remaining)`,
+          cooldownRemainingMs: remainingMs
+        };
+      }
+    }
+
+    return null;
   }
 
   /**
@@ -150,7 +222,13 @@ export class ChoiceEvaluator {
    * @private
    */
   _evaluateLockedChoice(choice) {
-    const requirements = choice.requirements || [];
+    // Fallback: if author marked the choice as locked but only provided conditions,
+    // treat those conditions as requirements (selectability gate) to match author intent.
+    const requirements = (choice.requirements && choice.requirements.length > 0)
+      ? choice.requirements
+      : (choice.conditions && choice.conditions.length > 0)
+        ? choice.conditions
+        : [];
     const requirementsMet = this._checkRequirements(requirements);
 
     return {
@@ -306,7 +384,8 @@ export class ChoiceEvaluator {
   _hashCurrentStats() {
     // Simple hash of stats that could affect choices
     const relevantStats = this.statsManager.getAllStats();
-    const statsString = JSON.stringify(relevantStats);
+    const relevantFlags = this.statsManager.getAllFlags ? this.statsManager.getAllFlags() : {};
+    const statsString = JSON.stringify({ stats: relevantStats, flags: relevantFlags });
     
     // Simple string hash for cache keys
     let hash = 0;

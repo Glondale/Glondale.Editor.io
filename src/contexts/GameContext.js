@@ -396,6 +396,9 @@ export function GameProvider({ children }) {
   }
   const exportableDataManager = exportableDataManagerRef.current;
 
+  // Prevent rapid duplicate choice selections
+  const isChoosingRef = React.useRef(false);
+
   // Auto-save effect
   useEffect(() => {
     if (!state.autoSaveEnabled || !state.adventure) return;
@@ -453,6 +456,11 @@ export function GameProvider({ children }) {
     },
 
     makeChoice: (choiceId) => {
+      if (isChoosingRef.current) {
+        // Ignore rapid repeat clicks while processing a choice
+        return;
+      }
+      isChoosingRef.current = true;
       try {
         console.log('Making choice:', choiceId, 'from scene:', state.currentScene?.id);
         
@@ -545,6 +553,8 @@ export function GameProvider({ children }) {
       } catch (error) {
         console.error('makeChoice error:', error);
         dispatch({ type: 'SET_ERROR', payload: error instanceof Error ? error.message : 'Failed to make choice' });
+      } finally {
+        isChoosingRef.current = false;
       }
     },
 

@@ -160,7 +160,7 @@ export function useGameState() {
       console.warn('useGameState: failed to read choices from storyEngine', e);
       setAvailableChoices([]);
     }
-  }, [state.adventure, state.currentScene, state.visitedScenes, state.choiceHistory]);
+  }, [state.adventure, state.currentScene, state.visitedScenes, state.choiceHistory, state.flags, state.stats]);
 
   return {
     // Provide the compatibility gameState

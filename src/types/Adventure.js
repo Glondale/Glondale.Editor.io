@@ -59,8 +59,9 @@
  *   priority?: number,           // NEW: Display order priority
  *   category?: string,           // NEW: Choice category
  *   consequences?: Consequence[], // NEW: Preview of choice outcomes
- *   oneTime?: boolean,           // NEW: Can only be selected once
- *   cooldown?: number           // NEW: Time before can select again (ms)
+ *   oneTime?: boolean,           // NEW: Can only be selected once (equivalent to maxUses=1)
+ *   maxUses?: number,            // NEW: Maximum number of times this choice can be selected (0 = unlimited)
+ *   cooldown?: number           // NEW: Cooldown in milliseconds before it can be selected again
  * }
  * 
  * Condition structure (Phase 3 Enhanced):

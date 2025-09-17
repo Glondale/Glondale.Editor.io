@@ -8,8 +8,10 @@ import React, { useState, useEffect } from "https://esm.sh/react@18";
 export default function ConditionBuilder({
   conditions = [],
   adventureStats = [],
+  availableFlags = [],
   availableScenes = [],
   onChange = () => {},
+  onInlineAddFlag = null,
   className = ''
 }) {
   const [expandedCondition, setExpandedCondition] = useState(null);
@@ -79,6 +81,8 @@ export default function ConditionBuilder({
     switch (type) {
       case 'stat':
         return adventureStats.map(stat => ({ value: stat.id, label: stat.name }));
+      case 'flag':
+        return availableFlags.map(flag => ({ value: flag.id, label: flag.name || flag.id }));
       case 'scene_visited':
         return availableScenes.map(scene => ({ value: scene.id, label: scene.title || 'Untitled Scene' }));
       default:
@@ -161,26 +165,52 @@ export default function ConditionBuilder({
           className: 'block text-sm font-medium text-gray-700 mb-1'
         }, condition.type === 'stat' ? 'Stat' : condition.type === 'scene_visited' ? 'Scene' : 'Flag Name'),
         
-        availableKeys.length > 0 ? React.createElement('select', {
-          value: condition.key || '',
-          onChange: (e) => updateCondition(condition.id, { key: e.target.value }),
-          className: 'w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500'
-        }, [
-          React.createElement('option', { key: 'empty', value: '' }, 
-            `Select ${condition.type === 'stat' ? 'stat' : condition.type === 'scene_visited' ? 'scene' : 'flag'}...`),
-          ...availableKeys.map(option =>
-            React.createElement('option', {
-              key: option.value,
-              value: option.value
-            }, option.label)
-          )
-        ]) : React.createElement('input', {
-          type: 'text',
-          value: condition.key || '',
-          onChange: (e) => updateCondition(condition.id, { key: e.target.value }),
-          placeholder: `Enter ${condition.type === 'stat' ? 'stat name' : 'flag name'}...`,
-          className: 'w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500'
-        })
+        condition.type === 'flag' && availableKeys.length > 0 ?
+          React.createElement('div', { className: 'flex items-center gap-2' }, [
+            React.createElement('select', {
+              key: 'flag-select',
+              value: condition.key || '',
+              onChange: (e) => updateCondition(condition.id, { key: e.target.value }),
+              className: 'flex-1 px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500'
+            }, [
+              React.createElement('option', { key: 'empty', value: '' }, 'Select flag...'),
+              ...availableKeys.map(option =>
+                React.createElement('option', { key: option.value, value: option.value }, option.label)
+              )
+            ]),
+            React.createElement('button', {
+              key: 'add-flag-inline',
+              type: 'button',
+              className: 'px-2 py-1 text-xs bg-green-100 text-green-700 rounded hover:bg-green-200',
+              onClick: () => {
+                if (typeof onInlineAddFlag === 'function') {
+                  onInlineAddFlag((newFlag) => updateCondition(condition.id, { key: newFlag.id }));
+                }
+              },
+              title: 'Create a new flag'
+            }, '+ Add Flag')
+          ])
+        : availableKeys.length > 0 ? React.createElement('select', {
+            value: condition.key || '',
+            onChange: (e) => updateCondition(condition.id, { key: e.target.value }),
+            className: 'w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500'
+          }, [
+            React.createElement('option', { key: 'empty', value: '' }, 
+              `Select ${condition.type === 'stat' ? 'stat' : condition.type === 'scene_visited' ? 'scene' : 'flag'}...`),
+            ...availableKeys.map(option =>
+              React.createElement('option', {
+                key: option.value,
+                value: option.value
+              }, option.label)
+            )
+          ])
+        : React.createElement('input', {
+            type: 'text',
+            value: condition.key || '',
+            onChange: (e) => updateCondition(condition.id, { key: e.target.value }),
+            placeholder: `Enter ${condition.type === 'stat' ? 'stat name' : 'flag name'}...`,
+            className: 'w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500'
+          })
       ]),
 
       // Operator selection

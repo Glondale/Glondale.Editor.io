@@ -143,7 +143,9 @@ export class StoryEngine {
 
     this.currentScene.choices.forEach(choice => {
       if (choice.isSecret && !this.secretChoicesAvailable.has(choice.id)) {
-        const evaluation = this.choiceEvaluator.evaluateChoice(choice, this.visitedScenes, this.choiceHistory);
+        // Pass the set of already discovered secret IDs
+        const discovered = Array.from(this.secretChoicesAvailable || []);
+        const evaluation = this.choiceEvaluator.evaluateChoice(choice, discovered);
         
         if (evaluation.state === 'VISIBLE') {
           this.secretChoicesAvailable.add(choice.id);
@@ -236,7 +238,9 @@ export class StoryEngine {
     console.log('StoryEngine: Found choice:', choice.text, '-> target:', choice.targetSceneId);
 
     // Evaluate choice state
-    const evaluation = this.choiceEvaluator.evaluateChoice(choice, this.visitedScenes, this.choiceHistory);
+  // Pass discovered secret IDs per ChoiceEvaluator signature
+  const discovered = Array.from(this.secretChoicesAvailable || []);
+  const evaluation = this.choiceEvaluator.evaluateChoice(choice, discovered);
     
     // Block locked or hidden choices
     if (evaluation.state === 'LOCKED') {
@@ -290,9 +294,46 @@ export class StoryEngine {
         case 'add_stat':
           this.statsManager.addToStat(action.key, action.value);
           break;
-        case 'set_flag':
-          this.statsManager.setFlag(action.key, action.value);
+        case 'multiply_stat': {
+          const current = this.statsManager.getStat(action.key) || 0;
+          const factor = Number(action.value) || 1;
+          this.statsManager.setStat(action.key, current * factor);
           break;
+        }
+        case 'set_flag':
+          // Coerce to boolean; support legacy 0/1 and 'true'/'false' strings
+          let boolVal;
+          if (typeof action.value === 'boolean') {
+            boolVal = action.value;
+          } else if (typeof action.value === 'number') {
+            boolVal = action.value !== 0;
+            console.warn(`StoryEngine: set_flag received number ${action.value} for ${action.key}; coercing to ${boolVal}`);
+          } else if (typeof action.value === 'string') {
+            const lower = action.value.toLowerCase();
+            if (lower === 'true' || lower === '1') boolVal = true;
+            else if (lower === 'false' || lower === '0') boolVal = false;
+            else boolVal = Boolean(action.value);
+            console.warn(`StoryEngine: set_flag received string "${action.value}" for ${action.key}; coercing to ${boolVal}`);
+          } else {
+            boolVal = Boolean(action.value);
+            console.warn(`StoryEngine: set_flag received non-boolean for ${action.key}; coercing to ${boolVal}`);
+          }
+          this.statsManager.setFlag(action.key, boolVal);
+          break;
+        case 'toggle_flag':
+          this.statsManager.toggleFlag(action.key);
+          break;
+        case 'add_achievement': {
+          // Record achievement discovery; ensure it exists in adventure.achievements
+          const achId = action.key;
+          const exists = (this.adventure?.achievements || []).some(a => a.id === achId);
+          if (!exists) {
+            console.warn(`StoryEngine: Achievement id not found: ${achId}`);
+          }
+          // Reuse secretsDiscovered list as achievements log alternative if no dedicated system
+          this.secretsDiscovered.push({ choiceId: `achievement:${achId}`, sceneId: this.currentScene?.id, timestamp: Date.now() });
+          break;
+        }
         case 'add_inventory': {
           const quantity = action.value || 1;
           const result = this.inventoryManager.addItem(action.key, quantity);
@@ -319,6 +360,14 @@ export class StoryEngine {
           console.warn('StoryEngine: Unknown action type:', action.type);
       }
     });
+
+    // After state-affecting actions, clear evaluation caches so choices re-evaluate immediately
+    if (this.conditionParser && typeof this.conditionParser.clearCache === 'function') {
+      this.conditionParser.clearCache();
+    }
+    if (this.choiceEvaluator && typeof this.choiceEvaluator.clearCache === 'function') {
+      this.choiceEvaluator.clearCache();
+    }
   }
 
   logInventoryOutcome(result, fallbackMessage) {

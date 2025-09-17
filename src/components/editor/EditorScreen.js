@@ -6,10 +6,13 @@ import ContextMenu from './core/ContextMenu.js';
 import SceneEditDialog from './dialogs/SceneEditDialog.js';
 import ChoiceEditDialog from './dialogs/ChoiceEditDialog.js';
 import InventoryEditor from './InventoryEditor.js';
+import AchievementsEditor from './AchievementsEditor.js';
+import StatsEditor from './StatsEditor.js';
 import EditorSessionStorage from '../../engine/EditorSessionStorage.js';
 import AdvancedChoiceDialog from './AdvancedChoiceDialog.js';
 import ActionHistoryDialog from './dialogs/ActionHistoryDialog.js';
 import SearchPanel from './panels/SearchPanel.js';
+import FlagEditor from './dialogs/FlagEditor.js';
 import { commandHistory } from '../../services/CommandHistory.js';
 import {
   CreateNodeCommand,
@@ -99,6 +102,13 @@ export default function EditorScreen({
   
   // Inventory editor state
   const [showInventoryEditor, setShowInventoryEditor] = useState(false);
+  const [showAchievementsEditor, setShowAchievementsEditor] = useState(false);
+  const [showStatsEditor, setShowStatsEditor] = useState(false);
+  // Flags editor state
+  const [showFlagEditor, setShowFlagEditor] = useState(false);
+  const [editingFlag, setEditingFlag] = useState(null);
+  // Inline flag creation callback (used by dropdowns with "+ Add Flag")
+  const [pendingFlagSelectionCallback, setPendingFlagSelectionCallback] = useState(null);
 
   // Context menu state
   const [contextMenu, setContextMenu] = useState({
@@ -920,6 +930,47 @@ export default function EditorScreen({
       metadata: { ...prev.metadata, modified: Date.now() }
     }));
   }, []);
+
+  // Flag management handlers
+  const handleFlagAdd = useCallback((flagData) => {
+    setAdventure(prev => ({
+      ...prev,
+      flags: [...(prev.flags || []), flagData],
+      metadata: { ...prev.metadata, modified: Date.now() }
+    }));
+    setHasUnsavedChanges(true);
+  }, []);
+
+  const handleFlagUpdate = useCallback((flagData) => {
+    setAdventure(prev => ({
+      ...prev,
+      flags: (prev.flags || []).map(f => f.id === flagData.id ? flagData : f),
+      metadata: { ...prev.metadata, modified: Date.now() }
+    }));
+    setHasUnsavedChanges(true);
+  }, []);
+
+  const handleFlagDelete = useCallback((flagId) => {
+    setAdventure(prev => ({
+      ...prev,
+      flags: (prev.flags || []).filter(f => f.id !== flagId),
+      metadata: { ...prev.metadata, modified: Date.now() }
+    }));
+    setHasUnsavedChanges(true);
+    setShowFlagEditor(false);
+    setEditingFlag(null);
+  }, []);
+  
+  // Allow child components to open the Flag Editor inline and receive the created flag
+  const handleInlineAddFlag = useCallback((onCreated) => {
+    if (typeof onCreated === 'function') {
+      setPendingFlagSelectionCallback(() => onCreated);
+    } else {
+      setPendingFlagSelectionCallback(null);
+    }
+    setEditingFlag(null);
+    setShowFlagEditor(true);
+  }, []);
   
   const handleConnectionCreateCommand = useCallback(async (connectionData) => {
     setConnections(prev => new Map(prev.set(connectionData.id, connectionData)));
@@ -1651,7 +1702,9 @@ export default function EditorScreen({
       requirements: [],
       consequences: [],
       priority: 0,
-      oneTime: false
+        oneTime: false,
+        maxUses: 0,
+        cooldown: 0
     };
 
     const command = new CreateChoiceCommand(
@@ -1892,12 +1945,14 @@ export default function EditorScreen({
         onChoiceAdd: handleChoiceAdd,
         onChoiceUpdate: handleChoiceUpdate,
         onChoiceDelete: handleChoiceDelete,
-        onStatAdd: handleStatAdd,
+        onStatAdd: () => setShowStatsEditor(true),
         onStatUpdate: handleStatUpdate,
         onStatDelete: handleStatDelete,
         onOpenSceneDialog: openSceneDialog,
         onOpenChoiceDialog: (nodeId, choiceId) => openAdvancedChoiceDialog(nodeId, choiceId),
-        onOpenInventoryEditor: () => setShowInventoryEditor(true)
+        onOpenInventoryEditor: () => setShowInventoryEditor(true),
+        onOpenAchievementsEditor: () => setShowAchievementsEditor(true),
+        onOpenFlagsEditor: () => { setShowFlagEditor(true); setEditingFlag(null); }
       })
     ]),
 
@@ -1915,6 +1970,8 @@ export default function EditorScreen({
       scene: activeDialog === 'scene' ? dialogData : null,
       adventureStats: adventure.stats,
       adventureInventory: adventure.inventory,
+      adventureFlags: adventure.flags,
+      onInlineAddFlag: handleInlineAddFlag,
       onSave: handleSceneSave,
       onCancel: closeDialog,
       onDelete: (sceneId) => {
@@ -1933,6 +1990,8 @@ export default function EditorScreen({
       availableStats: adventure.stats || [],
       availableFlags: adventure.flags || [],
       availableItems: adventure.inventory || [],
+  availableAchievements: adventure.achievements || [],
+      onInlineAddFlag: handleInlineAddFlag,
       existingChoices: selectedNode?.choices || [],
       onSave: handleChoiceSave,
       onCancel: closeDialog,
@@ -1946,16 +2005,58 @@ export default function EditorScreen({
       }
     }),
 
+    React.createElement(FlagEditor, {
+      key: 'flag-editor',
+      isOpen: showFlagEditor,
+      flags: adventure.flags || [],
+      editingFlag: editingFlag,
+      onSave: (flag) => {
+        const exists = (adventure.flags || []).some(f => f.id === flag.id);
+        if (exists) handleFlagUpdate(flag); else handleFlagAdd(flag);
+        setShowFlagEditor(false);
+        setEditingFlag(null);
+        // If invoked from an inline selection, notify the requester with the created/updated flag
+        if (pendingFlagSelectionCallback) {
+          try {
+            pendingFlagSelectionCallback(flag);
+          } finally {
+            setPendingFlagSelectionCallback(null);
+          }
+        }
+      },
+      onCancel: () => { setShowFlagEditor(false); setEditingFlag(null); },
+      onDelete: (flagId) => handleFlagDelete(flagId)
+    }),
+
     React.createElement(InventoryEditor, {
       key: 'inventory-editor',
       isOpen: showInventoryEditor,
-      inventory: adventure.inventory,
-      categories: adventure.categories,
-      onSave: (newInventory) => {
+      items: adventure.inventory,
+      onItemsChange: (newInventory) => {
         handleInventoryUpdate(newInventory);
-        setShowInventoryEditor(false);
       },
-      onCancel: () => setShowInventoryEditor(false)
+      onClose: () => setShowInventoryEditor(false)
+    }),
+
+    React.createElement(AchievementsEditor, {
+      key: 'achievements-editor',
+      isOpen: showAchievementsEditor,
+      achievements: adventure.achievements || [],
+      onClose: () => setShowAchievementsEditor(false),
+      onAchievementsChange: (next) => setAdventure(prev => ({ ...prev, achievements: next, metadata: { ...prev.metadata, modified: Date.now() } })),
+      availableStats: adventure.stats || [],
+      availableFlags: adventure.flags || [],
+      availableItems: adventure.inventory || [],
+      availableScenes: Array.from(nodes.values()),
+      onInlineAddFlag: handleInlineAddFlag
+    }),
+
+    React.createElement(StatsEditor, {
+      key: 'stats-editor',
+      isOpen: showStatsEditor,
+      stats: adventure.stats || [],
+      onClose: () => setShowStatsEditor(false),
+      onStatsChange: (next) => setAdventure(prev => ({ ...prev, stats: next, metadata: { ...prev.metadata, modified: Date.now() } }))
     }),
 
     React.createElement(ActionHistoryDialog, {

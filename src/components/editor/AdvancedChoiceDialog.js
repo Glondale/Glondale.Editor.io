@@ -27,7 +27,9 @@ export function AdvancedChoiceDialog({
   availableFlags = [], 
   availableItems = [], 
   availableScenes = [], 
-  existingChoices = [] 
+  existingChoices = [],
+  onInlineAddFlag = null,
+  availableAchievements = []
 }) {
   const [choiceData, setChoiceData] = useState({
     id: '',
@@ -40,7 +42,10 @@ export function AdvancedChoiceDialog({
     requirements: [],
     actions: [],
     description: '',
-    category: 'normal'
+    category: 'normal',
+    oneTime: false,
+    maxUses: 0,
+    cooldown: 0
   });
 
   const [validationErrors, setValidationErrors] = useState([]);
@@ -62,7 +67,10 @@ export function AdvancedChoiceDialog({
           requirements: choice.requirements || [],
           actions: choice.actions || [],
           description: choice.description || '',
-          category: choice.category || 'normal'
+          category: choice.category || 'normal',
+          oneTime: !!choice.oneTime,
+          maxUses: typeof choice.maxUses === 'number' ? choice.maxUses : 0,
+          cooldown: typeof choice.cooldown === 'number' ? choice.cooldown : 0
         });
       } else {
         // New choice defaults
@@ -77,7 +85,10 @@ export function AdvancedChoiceDialog({
           requirements: [],
           actions: [],
           description: '',
-          category: 'normal'
+          category: 'normal',
+          oneTime: false,
+          maxUses: 0,
+          cooldown: 0
         });
       }
       setActiveTab('basic');
@@ -110,6 +121,17 @@ export function AdvancedChoiceDialog({
 
     if (choiceData.isSecret && !choiceData.conditions.length) {
       warnings.push('Secret choices should have discovery conditions');
+    }
+
+    // Usage limits validation
+    if (choiceData.oneTime && choiceData.maxUses && choiceData.maxUses > 0) {
+      warnings.push('Both One-time and Max uses are set; One-time implies max uses = 1');
+    }
+    if (choiceData.maxUses < 0) {
+      errors.push('Max uses cannot be negative');
+    }
+    if (choiceData.cooldown < 0) {
+      errors.push('Cooldown cannot be negative');
     }
 
     // ID uniqueness
@@ -180,6 +202,11 @@ export function AdvancedChoiceDialog({
       ...prev,
       actions: newActions
     }));
+  }, []);
+
+  // Toggle one-time from Actions tab convenience checkbox
+  const handleToggleOneTime = useCallback((value) => {
+    setChoiceData(prev => ({ ...prev, oneTime: !!value }));
   }, []);
 
   // Handle save
@@ -397,6 +424,51 @@ export function AdvancedChoiceDialog({
                 )
               ),
 
+              // Usage limits
+              React.createElement('div', null,
+                React.createElement('label', { className: 'block text-sm font-medium text-gray-700 mb-3' }, 'Usage Limits'),
+                React.createElement('div', { className: 'grid grid-cols-1 md:grid-cols-3 gap-4' },
+                  // One-time checkbox
+                  React.createElement('div', { className: `border rounded-lg p-4 ${choiceData.oneTime ? 'border-yellow-500 bg-yellow-50' : 'border-gray-300'}` },
+                    React.createElement('label', { className: 'flex items-start cursor-pointer' },
+                      React.createElement('input', {
+                        type: 'checkbox',
+                        checked: choiceData.oneTime,
+                        onChange: (e) => handleFieldChange('oneTime', e.target.checked),
+                        className: 'mt-1 mr-3'
+                      }),
+                      React.createElement('div', null,
+                        React.createElement('div', { className: 'font-medium text-sm' }, '⚡ One-time'),
+                        React.createElement('div', { className: 'text-xs text-gray-600 mt-1' }, 'Can only be selected once')
+                      )
+                    )
+                  ),
+                  // Max uses number
+                  React.createElement('div', { className: 'border rounded-lg p-4 border-gray-300' },
+                    React.createElement('label', { className: 'block text-xs text-gray-600 mb-1' }, 'Max uses (0 = unlimited)'),
+                    React.createElement('input', {
+                      type: 'number',
+                      min: 0,
+                      value: choiceData.maxUses,
+                      onChange: (e) => handleFieldChange('maxUses', Math.max(0, Number(e.target.value)) || 0),
+                      className: 'w-full px-2 py-1 border rounded text-sm'
+                    })
+                  ),
+                  // Cooldown ms
+                  React.createElement('div', { className: 'border rounded-lg p-4 border-gray-300' },
+                    React.createElement('label', { className: 'block text-xs text-gray-600 mb-1' }, 'Cooldown (ms)'),
+                    React.createElement('input', {
+                      type: 'number',
+                      min: 0,
+                      value: choiceData.cooldown,
+                      onChange: (e) => handleFieldChange('cooldown', Math.max(0, Number(e.target.value)) || 0),
+                      className: 'w-full px-2 py-1 border rounded text-sm'
+                    })
+                  )
+                ),
+                (choiceData.oneTime && choiceData.maxUses > 0) && React.createElement('div', { className: 'text-xs text-yellow-700 mt-2' }, 'Note: One-time overrides Max uses')
+              ),
+
               // Description
               React.createElement('div', null,
                 React.createElement('label', {
@@ -433,7 +505,8 @@ export function AdvancedChoiceDialog({
                 availableStats,
                 availableFlags,
                 availableItems,
-                availableScenes
+                availableScenes,
+                onInlineAddFlag
               })
             ),
 
@@ -458,7 +531,8 @@ export function AdvancedChoiceDialog({
                 availableStats,
                 availableFlags,
                 availableItems,
-                availableScenes
+                availableScenes,
+                onInlineAddFlag
               })
             ),
 
@@ -481,7 +555,12 @@ export function AdvancedChoiceDialog({
                 actions: choiceData.actions,
                 onActionsChange: handleActionsChange,
                 availableStats,
-                availableFlags
+                availableFlags,
+                availableItems,
+                availableAchievements,
+                onInlineAddFlag,
+                isOneTime: !!choiceData.oneTime,
+                onToggleOneTime: handleToggleOneTime
               })
             )
           )
@@ -615,7 +694,7 @@ export function AdvancedChoiceDialog({
 }
 
 // Simple action builder component
-function ActionBuilder({ actions = [], onActionsChange, availableStats = [], availableFlags = [] }) {
+function ActionBuilder({ actions = [], onActionsChange, availableStats = [], availableFlags = [], availableItems = [], availableAchievements = [], onInlineAddFlag = null, isOneTime = false, onToggleOneTime = () => {} }) {
   const handleAddAction = React.useCallback(() => {
     const newAction = {
       id: generateActionId(),
@@ -641,6 +720,17 @@ function ActionBuilder({ actions = [], onActionsChange, availableStats = [], ava
   return React.createElement('div', {
     className: 'space-y-3'
   },
+    // One-time convenience toggle
+    React.createElement('div', { className: 'flex items-center justify-between p-3 bg-yellow-50 border border-yellow-200 rounded' }, [
+      React.createElement('label', { key: 'label', className: 'text-sm text-yellow-800 font-medium' }, 'One-time choice (disable after first use)'),
+      React.createElement('input', {
+        key: 'checkbox',
+        type: 'checkbox',
+        checked: !!isOneTime,
+        onChange: (e) => onToggleOneTime(e.target.checked),
+        className: 'w-4 h-4'
+      })
+    ]),
     React.createElement('div', {
       className: 'flex justify-between items-center'
     },
@@ -673,30 +763,75 @@ function ActionBuilder({ actions = [], onActionsChange, availableStats = [], ava
             },
               React.createElement('option', { value: 'set_stat' }, 'Set Stat'),
               React.createElement('option', { value: 'add_stat' }, 'Add to Stat'),
-              React.createElement('option', { value: 'set_flag' }, 'Set Flag')
+              React.createElement('option', { value: 'multiply_stat' }, 'Multiply Stat'),
+              React.createElement('option', { value: 'set_flag' }, 'Set Flag'),
+              React.createElement('option', { value: 'toggle_flag' }, 'Toggle Flag'),
+              React.createElement('option', { value: 'add_inventory' }, 'Add Inventory'),
+              React.createElement('option', { value: 'remove_inventory' }, 'Remove Inventory'),
+              React.createElement('option', { value: 'set_inventory' }, 'Set Inventory'),
+              React.createElement('option', { value: 'add_achievement' }, 'Unlock Achievement')
             ),
 
-            React.createElement('select', {
-              value: action.key,
-              onChange: (e) => handleActionUpdate(index, { key: e.target.value }),
-              className: 'flex-1 px-2 py-1 border rounded text-sm'
-            },
-              React.createElement('option', { value: '' }, 'Select...'),
-              (action.type.includes('stat') ? availableStats : availableFlags).map(item =>
-                React.createElement('option', {
-                  key: item.id,
-                  value: item.id
-                }, item.name)
-              )
-            ),
+            // Key selector: stats vs flags
+            action.type === 'set_flag' || action.type === 'toggle_flag' ?
+              React.createElement('div', { className: 'flex-1 flex items-center gap-2' }, [
+                React.createElement('select', {
+                  key: 'flag-select',
+                  value: action.key || '',
+                  onChange: (e) => handleActionUpdate(index, { key: e.target.value }),
+                  className: 'flex-1 px-2 py-1 border rounded text-sm'
+                }, [
+                  React.createElement('option', { key: 'empty', value: '' }, 'Select flag...'),
+                  ...availableFlags.map(f => React.createElement('option', { key: f.id, value: f.id }, f.name || f.id))
+                ]),
+                React.createElement('button', {
+                  key: 'add-flag-inline',
+                  className: 'px-2 py-1 text-xs bg-green-100 text-green-700 rounded hover:bg-green-200',
+                  onClick: () => {
+                    if (typeof onInlineAddFlag === 'function') {
+                      onInlineAddFlag((newFlag) => {
+                        handleActionUpdate(index, { key: newFlag.id });
+                      });
+                    }
+                  },
+                  title: 'Create a new flag'
+                }, '+ Add Flag')
+              ])
+            : action.type === 'add_inventory' || action.type === 'remove_inventory' || action.type === 'set_inventory' ?
+              React.createElement('select', {
+                value: action.key || '',
+                onChange: (e) => handleActionUpdate(index, { key: e.target.value }),
+                className: 'flex-1 px-2 py-1 border rounded text-sm'
+              }, [
+                React.createElement('option', { key: 'empty', value: '' }, 'Select item...'),
+                ...availableItems.map(item => React.createElement('option', { key: item.id, value: item.id }, item.name))
+              ])
+            : action.type === 'add_achievement' ?
+              React.createElement('select', {
+                value: action.key || '',
+                onChange: (e) => handleActionUpdate(index, { key: e.target.value }),
+                className: 'flex-1 px-2 py-1 border rounded text-sm'
+              }, [
+                React.createElement('option', { key: 'empty', value: '' }, 'Select achievement...'),
+                ...availableAchievements.map(a => React.createElement('option', { key: a.id, value: a.id }, a.name || a.id))
+              ])
+            :
+              React.createElement('select', {
+                value: action.key,
+                onChange: (e) => handleActionUpdate(index, { key: e.target.value }),
+                className: 'flex-1 px-2 py-1 border rounded text-sm'
+              },
+                React.createElement('option', { value: '' }, 'Select...'),
+                (action.type.includes('stat') ? availableStats : availableFlags).map(item =>
+                  React.createElement('option', {
+                    key: item.id,
+                    value: item.id
+                  }, item.name)
+                )
+              ),
 
-            action.type !== 'set_flag' ?
-              React.createElement('input', {
-                type: 'number',
-                value: action.value,
-                onChange: (e) => handleActionUpdate(index, { value: Number(e.target.value) }),
-                className: 'w-20 px-2 py-1 border rounded text-sm'
-              }) :
+            // Value field cadence by action type
+            action.type === 'set_flag' ?
               React.createElement('select', {
                 value: action.value,
                 onChange: (e) => handleActionUpdate(index, { value: e.target.value === 'true' }),
@@ -704,7 +839,15 @@ function ActionBuilder({ actions = [], onActionsChange, availableStats = [], ava
               },
                 React.createElement('option', { value: 'true' }, 'True'),
                 React.createElement('option', { value: 'false' }, 'False')
-              ),
+              )
+            : action.type === 'toggle_flag' || action.type === 'add_achievement' ? null
+            : (action.type === 'set_stat' || action.type === 'add_stat' || action.type === 'multiply_stat' || action.type === 'set_inventory' || action.type === 'add_inventory' || action.type === 'remove_inventory') ?
+              React.createElement('input', {
+                type: 'number',
+                value: action.value,
+                onChange: (e) => handleActionUpdate(index, { value: Number(e.target.value) }),
+                className: 'w-20 px-2 py-1 border rounded text-sm'
+              }) : null,
 
             React.createElement('button', {
               onClick: () => handleActionDelete(index),
