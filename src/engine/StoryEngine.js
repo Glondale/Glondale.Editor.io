@@ -20,7 +20,7 @@ export class StoryEngine {
     this.choiceHistory = [];
     this.secretsDiscovered = [];
     this.secretChoicesAvailable = new Set(); // Track which secret choices are permanently unlocked
-  this.executedActions = new Set(); // Track one-time actions executed (by action.id)
+    this.executedActions = new Set(); // Track one-time actions executed (by action.id)
     
     // Validation integration
     this.validationService = validationService;

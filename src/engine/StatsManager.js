@@ -111,7 +111,7 @@ export class StatsManager {
       }
     }
     
-  this.stats[id] = newValue;
+    this.stats[id] = newValue;
     
     // Record change history for analytics
     if (recordHistory && oldValue !== newValue) {
