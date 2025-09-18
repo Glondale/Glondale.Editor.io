@@ -1,871 +1,894 @@
-/**
- * AdvancedChoiceDialog.js - Enhanced choice editing with secret/locked features
- * 
- * Features:
- * - Secret and locked choice configuration
- * - Advanced condition builder integration
- * - Requirements vs conditions distinction
- * - Visual choice type indicators
- * - Real-time validation and preview
- * 
- * Integration Points:
- * - ConditionBuilder: Complex condition creation
- * - ChoiceEvaluator: Choice type logic
- * - SceneEditDialog: Enhanced choice editing
- * - EditorScreen: Choice management integration
- */
-
-import React, { useState, useCallback, useMemo, useEffect } from 'https://esm.sh/react@18';
+import React, { useState, useMemo, useEffect, useCallback } from "https://esm.sh/react@18";
 import ConditionBuilder from '../common/ConditionBuilder.js';
 
+const INPUT_TYPES = [
+  { value: 'static', label: 'Static (default)' },
+  { value: 'input_text', label: 'Player enters text' },
+  { value: 'input_number', label: 'Player enters number' },
+  { value: 'input_choice', label: 'Player selects option' }
+];
+
+const DEFAULT_INPUT_CONFIG = {
+  input_text: { variable: '', placeholder: '', maxLength: 200 },
+  input_number: { variable: '', min: null, max: null, step: 1 },
+  input_choice: { variable: '', options: [{ id: generateOptionId(), label: '', value: '' }], allowCustom: false }
+};
+
+const DEFAULT_CHOICE = {
+  id: '',
+  text: '',
+  targetSceneId: '',
+  isHidden: false,
+  isSecret: false,
+  isLocked: false,
+  isFake: false,
+  inputType: 'static',
+  inputConfig: {},
+  conditions: [],
+  selectableIf: [],
+  requirements: [],
+  actions: [],
+  description: '',
+  category: 'normal',
+  oneTime: false,
+  maxUses: 0,
+  cooldown: 0
+};
+
 export function AdvancedChoiceDialog({
-  choice = null, 
-  isOpen = false, 
-  onSave, 
-  onCancel, 
-  availableStats = [], 
-  availableFlags = [], 
-  availableItems = [], 
-  availableScenes = [], 
+  choice = null,
+  isOpen = false,
+  onSave,
+  onCancel,
+  availableStats = [],
+  availableFlags = [],
+  availableItems = [],
+  availableScenes = [],
   existingChoices = [],
   onInlineAddFlag = null,
   availableAchievements = []
 }) {
-  const [choiceData, setChoiceData] = useState({
-    id: '',
-    text: '',
-    targetSceneId: '',
-    isHidden: false,
-    isSecret: false,
-    isLocked: false,
-    conditions: [],
-    requirements: [],
-    actions: [],
-    description: '',
-    category: 'normal',
-    oneTime: false,
-    maxUses: 0,
-    cooldown: 0
-  });
-
-  const [validationErrors, setValidationErrors] = useState([]);
+  const [choiceData, setChoiceData] = useState({ ...DEFAULT_CHOICE, id: generateChoiceId(), inputConfig: {} });
   const [activeTab, setActiveTab] = useState('basic');
-  const [showPreview, setShowPreview] = useState(false);
+  const [errors, setErrors] = useState([]);
 
-  // Initialize choice data when dialog opens
+  const inputTypeOptions = useMemo(() => {
+    if (isChoiceScriptMode) {
+      return INPUT_TYPES.filter(option => option.value !== 'input_choice');
+    }
+    return INPUT_TYPES;
+  }, [isChoiceScriptMode]);
+
+  // Load choice data when dialog opens
   useEffect(() => {
-    if (isOpen) {
-      if (choice) {
-        setChoiceData({
-          id: choice.id || generateChoiceId(),
-          text: choice.text || '',
-          targetSceneId: choice.targetSceneId || '',
-          isHidden: choice.isHidden || false,
-          isSecret: choice.isSecret || false,
-          isLocked: choice.isLocked || false,
-          conditions: choice.conditions || [],
-          requirements: choice.requirements || [],
-          actions: choice.actions || [],
-          description: choice.description || '',
-          category: choice.category || 'normal',
-          oneTime: !!choice.oneTime,
-          maxUses: typeof choice.maxUses === 'number' ? choice.maxUses : 0,
-          cooldown: typeof choice.cooldown === 'number' ? choice.cooldown : 0
-        });
-      } else {
-        // New choice defaults
-        setChoiceData({
-          id: generateChoiceId(),
-          text: '',
-          targetSceneId: '',
-          isHidden: false,
-          isSecret: false,
-          isLocked: false,
-          conditions: [],
-          requirements: [],
-          actions: [],
-          description: '',
-          category: 'normal',
-          oneTime: false,
-          maxUses: 0,
-          cooldown: 0
-        });
-      }
-      setActiveTab('basic');
-      setShowPreview(false);
-      setValidationErrors([]);
-    }
-  }, [isOpen, choice]);
+    if (!isOpen) return;
+    const normalized = normalizeChoice(choice, { enforceChoiceScript: isChoiceScriptMode });
+    setChoiceData(normalized);
+    setActiveTab('basic');
+    setErrors([]);
+  }, [isOpen, choice, isChoiceScriptMode]);
 
-  // Validation
-  const validation = useMemo(() => {
-    const errors = [];
-    const warnings = [];
+  const validation = useMemo(() => validateChoice(choiceData, existingChoices, choice, availableScenes, { choiceScriptMode: isChoiceScriptMode }), [choiceData, existingChoices, choice, availableScenes, isChoiceScriptMode]);
 
-    if (!choiceData.text.trim()) {
-      errors.push('Choice text is required');
-    }
-
-    if (!choiceData.targetSceneId) {
-      errors.push('Target scene is required');
-    }
-
-    // Choice type validation
-    if (choiceData.isSecret && choiceData.isHidden) {
-      warnings.push('Secret choices are automatically hidden until discovered');
-    }
-
-    if (choiceData.isLocked && !choiceData.requirements.length) {
-      warnings.push('Locked choices should have requirements');
-    }
-
-    if (choiceData.isSecret && !choiceData.conditions.length) {
-      warnings.push('Secret choices should have discovery conditions');
-    }
-
-    // Usage limits validation
-    if (choiceData.oneTime && choiceData.maxUses && choiceData.maxUses > 0) {
-      warnings.push('Both One-time and Max uses are set; One-time implies max uses = 1');
-    }
-    if (choiceData.maxUses < 0) {
-      errors.push('Max uses cannot be negative');
-    }
-    if (choiceData.cooldown < 0) {
-      errors.push('Cooldown cannot be negative');
-    }
-
-    // ID uniqueness
-    const duplicate = existingChoices.find(c => c.id === choiceData.id && c !== choice);
-    if (duplicate) {
-      errors.push('Choice ID must be unique');
-    }
-
-    return { errors, warnings, isValid: errors.length === 0 };
-  }, [choiceData, existingChoices, choice]);
-
-  // Update validation errors when validation changes
   useEffect(() => {
-    setValidationErrors(validation.errors);
+    if (errors.length === 0) return;
+    setErrors(validation.errors);
   }, [validation]);
 
-  // Handle basic field changes
   const handleFieldChange = useCallback((field, value) => {
-    setChoiceData(prev => ({
-      ...prev,
-      [field]: value
-    }));
+    setChoiceData(prev => ({ ...prev, [field]: value }));
   }, []);
 
-  // Handle choice type changes with automatic adjustments
-  const handleChoiceTypeChange = useCallback((type, enabled) => {
+  const handleToggle = (field) => (event) => {
+    const checked = event.target.checked;
+    setChoiceData(prev => ({ ...prev, [field]: checked }));
+  };
+
+  const handleInputTypeChange = (event) => {
+    const value = event.target.value;
+    setChoiceData(prev => ({
+      ...prev,
+      inputType: value,
+      inputConfig: value === 'static' ? {} : ensureInputConfig(value, prev.inputConfig)
+    }));
+  };
+
+  const handleInputConfigChange = (field, value) => {
+    setChoiceData(prev => ({
+      ...prev,
+      inputConfig: {
+        ...ensureInputConfig(prev.inputType, prev.inputConfig),
+        [field]: value
+      }
+    }));
+  };
+
+  const handleAddOption = () => {
     setChoiceData(prev => {
-      const newData = { ...prev, [type]: enabled };
-
-      // Auto-adjust conflicting settings
-      if (type === 'isSecret' && enabled) {
-        newData.isHidden = false; // Secret choices handle their own hiding
-      }
-
-      if (type === 'isLocked' && enabled && !prev.requirements.length) {
-        // Auto-add a basic requirement template
-        newData.requirements = [{
-          type: 'stat',
-          key: availableStats[0]?.id || 'health',
-          operator: 'gte',
-          value: 50
-        }];
-      }
-
-      return newData;
+      const config = ensureInputConfig('input_choice', prev.inputConfig);
+      return {
+        ...prev,
+        inputConfig: {
+          ...config,
+          options: [...config.options, { id: generateOptionId(), label: '', value: '' }]
+        }
+      };
     });
-  }, [availableStats]);
+  };
 
-  // Handle conditions change
-  const handleConditionsChange = useCallback((newConditions) => {
+  const handleOptionChange = (optionId, updates) => {
+    setChoiceData(prev => {
+      const config = ensureInputConfig('input_choice', prev.inputConfig);
+      return {
+        ...prev,
+        inputConfig: {
+          ...config,
+          options: config.options.map(option => option.id === optionId ? { ...option, ...updates } : option)
+        }
+      };
+    });
+  };
+
+  const handleRemoveOption = (optionId) => {
+    setChoiceData(prev => {
+      const config = ensureInputConfig('input_choice', prev.inputConfig);
+      const options = config.options.filter(option => option.id !== optionId);
+      return {
+        ...prev,
+        inputConfig: {
+          ...config,
+          options: options.length > 0 ? options : [{ id: generateOptionId(), label: '', value: '' }]
+        }
+      };
+    });
+  };
+
+  const handleConditionsChange = (field) => (newConditions) => {
+    setChoiceData(prev => ({ ...prev, [field]: newConditions }));
+  };
+
+  const handleRequirementToggle = (index) => (value) => {
     setChoiceData(prev => ({
       ...prev,
-      conditions: newConditions
+      requirements: prev.requirements.map((req, idx) => idx === index ? value : req)
     }));
-  }, []);
+  };
 
-  // Handle requirements change
-  const handleRequirementsChange = useCallback((newRequirements) => {
+  const handleActionsChange = (actions) => {
+    setChoiceData(prev => ({ ...prev, actions }));
+  };
+
+  const addAction = () => {
     setChoiceData(prev => ({
       ...prev,
-      requirements: newRequirements
+      actions: [...prev.actions, createDefaultAction()]
     }));
-  }, []);
+  };
 
-  // Handle actions change
-  const handleActionsChange = useCallback((newActions) => {
+  const updateAction = (index, updates) => {
     setChoiceData(prev => ({
       ...prev,
-      actions: newActions
+      actions: prev.actions.map((action, idx) => idx === index ? { ...action, ...updates } : action)
     }));
-  }, []);
+  };
 
-  // Toggle one-time from Actions tab convenience checkbox
-  const handleToggleOneTime = useCallback((value) => {
-    setChoiceData(prev => ({ ...prev, oneTime: !!value }));
-  }, []);
+  const removeAction = (index) => {
+    setChoiceData(prev => ({
+      ...prev,
+      actions: prev.actions.filter((_, idx) => idx !== index)
+    }));
+  };
 
-  // Handle save
-  const handleSave = useCallback(() => {
-    if (validation.isValid) {
-      onSave(choiceData);
+  const attemptSave = () => {
+    if (!validation.isValid) {
+      setErrors(validation.errors);
+      setActiveTab(validation.focusTab || 'basic');
+      return;
     }
-  }, [choiceData, validation.isValid, onSave]);
 
-  // Generate choice preview
-  const choicePreview = useMemo(() => {
-    const type = choiceData.isSecret ? 'SECRET' : 
-                 choiceData.isLocked ? 'LOCKED' : 
-                 choiceData.isHidden ? 'HIDDEN' : 'NORMAL';
+    if (typeof onSave === 'function') {
+      const normalized = finalizeChoice(choiceData);
+      onSave(normalized);
+    }
+  };
 
-    const conditionsText = choiceData.conditions.length > 0 ? 
-      ` (${choiceData.conditions.length} condition${choiceData.conditions.length > 1 ? 's' : ''})` : '';
-    
-    const requirementsText = choiceData.requirements.length > 0 ? 
-      ` (${choiceData.requirements.length} requirement${choiceData.requirements.length > 1 ? 's' : ''})` : '';
+  if (!isOpen) {
+    return null;
+  }
 
-    return {
-      type,
-      conditionsText,
-      requirementsText,
-      hasActions: choiceData.actions.length > 0
-    };
-  }, [choiceData]);
-
-  if (!isOpen) return null;
-
-  return React.createElement('div', {
-    className: 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50'
-  },
+  return (
     React.createElement('div', {
-      className: 'bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-screen overflow-hidden'
-    },
-      // Header
+      className: 'fixed inset-0 z-30 flex items-center justify-center bg-black bg-opacity-50'
+    }, React.createElement('div', {
+      className: 'w-full max-w-4xl max-h-[90vh] overflow-hidden rounded-xl shadow-2xl bg-white flex flex-col'
+    }, [
       React.createElement('div', {
-        className: 'flex justify-between items-center p-6 border-b'
-      },
+        key: 'header',
+        className: 'px-6 py-4 border-b flex items-center justify-between bg-gray-50'
+      }, [
         React.createElement('h2', {
-          className: 'text-xl font-semibold text-gray-900'
-        }, choice ? 'Edit Choice' : 'Create Choice'),
-        
-        React.createElement('div', {
-          className: 'flex items-center gap-3'
-        },
+          key: 'title',
+          className: 'text-lg font-semibold text-gray-900'
+        }, choice ? 'Edit Choice' : 'Add Choice'),
+        React.createElement('div', { key: 'buttons', className: 'space-x-2' }, [
           React.createElement('button', {
-            onClick: () => setShowPreview(!showPreview),
-            className: `px-3 py-1 text-sm rounded-md transition-colors ${
-              showPreview ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-            }`
-          }, showPreview ? 'Hide Preview' : 'Show Preview'),
-          
-          React.createElement('button', {
-            onClick: onCancel,
-            className: 'text-gray-400 hover:text-gray-600'
-          }, '✕')
-        )
-      ),
-
-      React.createElement('div', {
-        className: 'flex flex-1 overflow-hidden'
-      },
-        // Main content
-        React.createElement('div', {
-          className: 'flex-1 flex flex-col overflow-hidden'
-        },
-          // Tabs
-          React.createElement('div', {
-            className: 'flex border-b'
-          },
-            ['basic', 'conditions', 'requirements', 'actions'].map(tab =>
-              React.createElement('button', {
-                key: tab,
-                onClick: () => setActiveTab(tab),
-                className: `px-4 py-3 text-sm font-medium border-b-2 transition-colors ${
-                  activeTab === tab 
-                    ? 'border-blue-500 text-blue-600' 
-                    : 'border-transparent text-gray-500 hover:text-gray-700'
-                }`
-              }, tab.charAt(0).toUpperCase() + tab.slice(1))
-            )
-          ),
-
-          // Tab content
-          React.createElement('div', {
-            className: 'flex-1 overflow-y-auto p-6'
-          },
-            // Basic tab
-            activeTab === 'basic' && React.createElement('div', {
-              className: 'space-y-6'
-            },
-              // Choice text
-              React.createElement('div', null,
-                React.createElement('label', {
-                  className: 'block text-sm font-medium text-gray-700 mb-2'
-                }, 'Choice Text *'),
-                React.createElement('textarea', {
-                  value: choiceData.text,
-                  onChange: (e) => handleFieldChange('text', e.target.value),
-                  rows: 3,
-                  className: 'w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 resize-vertical',
-                  placeholder: 'Enter the choice text that players will see...'
-                })
-              ),
-
-              // Target scene
-              React.createElement('div', null,
-                React.createElement('label', {
-                  className: 'block text-sm font-medium text-gray-700 mb-2'
-                }, 'Target Scene *'),
-                React.createElement('select', {
-                  value: choiceData.targetSceneId,
-                  onChange: (e) => handleFieldChange('targetSceneId', e.target.value),
-                  className: 'w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500'
-                },
-                  React.createElement('option', { value: '' }, 'Select target scene...'),
-                  availableScenes.map(scene =>
-                    React.createElement('option', {
-                      key: scene.id,
-                      value: scene.id
-                    }, scene.title)
-                  )
-                )
-              ),
-
-              // Choice type configuration
-              React.createElement('div', null,
-                React.createElement('label', {
-                  className: 'block text-sm font-medium text-gray-700 mb-3'
-                }, 'Choice Type'),
-                
-                React.createElement('div', {
-                  className: 'grid grid-cols-1 md:grid-cols-3 gap-4'
-                },
-                  // Hidden choice
-                  React.createElement('div', {
-                    className: `border rounded-lg p-4 cursor-pointer transition-all ${
-                      choiceData.isHidden ? 'border-blue-500 bg-blue-50' : 'border-gray-300 hover:border-gray-400'
-                    }`
-                  },
-                    React.createElement('label', {
-                      className: 'flex items-start cursor-pointer'
-                    },
-                      React.createElement('input', {
-                        type: 'checkbox',
-                        checked: choiceData.isHidden,
-                        onChange: (e) => handleChoiceTypeChange('isHidden', e.target.checked),
-                        className: 'mt-1 mr-3'
-                      }),
-                      React.createElement('div', null,
-                        React.createElement('div', {
-                          className: 'font-medium text-sm'
-                        }, '🫥 Hidden Choice'),
-                        React.createElement('div', {
-                          className: 'text-xs text-gray-600 mt-1'
-                        }, 'Not shown until conditions are met')
-                      )
-                    )
-                  ),
-
-                  // Secret choice
-                  React.createElement('div', {
-                    className: `border rounded-lg p-4 cursor-pointer transition-all ${
-                      choiceData.isSecret ? 'border-purple-500 bg-purple-50' : 'border-gray-300 hover:border-gray-400'
-                    }`
-                  },
-                    React.createElement('label', {
-                      className: 'flex items-start cursor-pointer'
-                    },
-                      React.createElement('input', {
-                        type: 'checkbox',
-                        checked: choiceData.isSecret,
-                        onChange: (e) => handleChoiceTypeChange('isSecret', e.target.checked),
-                        className: 'mt-1 mr-3'
-                      }),
-                      React.createElement('div', null,
-                        React.createElement('div', {
-                          className: 'font-medium text-sm'
-                        }, '🗝️ Secret Choice'),
-                        React.createElement('div', {
-                          className: 'text-xs text-gray-600 mt-1'
-                        }, 'Hidden until discovered, then permanent')
-                      )
-                    )
-                  ),
-
-                  // Locked choice
-                  React.createElement('div', {
-                    className: `border rounded-lg p-4 cursor-pointer transition-all ${
-                      choiceData.isLocked ? 'border-orange-500 bg-orange-50' : 'border-gray-300 hover:border-gray-400'
-                    }`
-                  },
-                    React.createElement('label', {
-                      className: 'flex items-start cursor-pointer'
-                    },
-                      React.createElement('input', {
-                        type: 'checkbox',
-                        checked: choiceData.isLocked,
-                        onChange: (e) => handleChoiceTypeChange('isLocked', e.target.checked),
-                        className: 'mt-1 mr-3'
-                      }),
-                      React.createElement('div', null,
-                        React.createElement('div', {
-                          className: 'font-medium text-sm'
-                        }, '🔒 Locked Choice'),
-                        React.createElement('div', {
-                          className: 'text-xs text-gray-600 mt-1'
-                        }, 'Visible but disabled until requirements met')
-                      )
-                    )
-                  )
-                )
-              ),
-
-              // Usage limits
-              React.createElement('div', null,
-                React.createElement('label', { className: 'block text-sm font-medium text-gray-700 mb-3' }, 'Usage Limits'),
-                React.createElement('div', { className: 'grid grid-cols-1 md:grid-cols-3 gap-4' },
-                  // One-time checkbox
-                  React.createElement('div', { className: `border rounded-lg p-4 ${choiceData.oneTime ? 'border-yellow-500 bg-yellow-50' : 'border-gray-300'}` },
-                    React.createElement('label', { className: 'flex items-start cursor-pointer' },
-                      React.createElement('input', {
-                        type: 'checkbox',
-                        checked: choiceData.oneTime,
-                        onChange: (e) => handleFieldChange('oneTime', e.target.checked),
-                        className: 'mt-1 mr-3'
-                      }),
-                      React.createElement('div', null,
-                        React.createElement('div', { className: 'font-medium text-sm' }, '⚡ One-time'),
-                        React.createElement('div', { className: 'text-xs text-gray-600 mt-1' }, 'Can only be selected once')
-                      )
-                    )
-                  ),
-                  // Max uses number
-                  React.createElement('div', { className: 'border rounded-lg p-4 border-gray-300' },
-                    React.createElement('label', { className: 'block text-xs text-gray-600 mb-1' }, 'Max uses (0 = unlimited)'),
-                    React.createElement('input', {
-                      type: 'number',
-                      min: 0,
-                      value: choiceData.maxUses,
-                      onChange: (e) => handleFieldChange('maxUses', Math.max(0, Number(e.target.value)) || 0),
-                      className: 'w-full px-2 py-1 border rounded text-sm'
-                    })
-                  ),
-                  // Cooldown ms
-                  React.createElement('div', { className: 'border rounded-lg p-4 border-gray-300' },
-                    React.createElement('label', { className: 'block text-xs text-gray-600 mb-1' }, 'Cooldown (ms)'),
-                    React.createElement('input', {
-                      type: 'number',
-                      min: 0,
-                      value: choiceData.cooldown,
-                      onChange: (e) => handleFieldChange('cooldown', Math.max(0, Number(e.target.value)) || 0),
-                      className: 'w-full px-2 py-1 border rounded text-sm'
-                    })
-                  )
-                ),
-                (choiceData.oneTime && choiceData.maxUses > 0) && React.createElement('div', { className: 'text-xs text-yellow-700 mt-2' }, 'Note: One-time overrides Max uses')
-              ),
-
-              // Description
-              React.createElement('div', null,
-                React.createElement('label', {
-                  className: 'block text-sm font-medium text-gray-700 mb-2'
-                }, 'Description (Optional)'),
-                React.createElement('textarea', {
-                  value: choiceData.description,
-                  onChange: (e) => handleFieldChange('description', e.target.value),
-                  rows: 2,
-                  className: 'w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 resize-vertical',
-                  placeholder: 'Internal description for editors...'
-                })
-              )
-            ),
-
-            // Conditions tab
-            activeTab === 'conditions' && React.createElement('div', {
-              className: 'space-y-4'
-            },
-              React.createElement('div', {
-                className: 'bg-blue-50 border border-blue-200 rounded-lg p-4'
-              },
-                React.createElement('h4', {
-                  className: 'font-medium text-blue-900 mb-2'
-                }, 'Discovery Conditions'),
-                React.createElement('p', {
-                  className: 'text-sm text-blue-800'
-                }, 'For hidden/secret choices: when should this choice become visible? For secret choices, once discovered it remains permanently available.')
-              ),
-
-              React.createElement(ConditionBuilder, {
-                conditions: choiceData.conditions,
-                onConditionsChange: handleConditionsChange,
-                availableStats,
-                availableFlags,
-                availableItems,
-                availableScenes,
-                onInlineAddFlag
-              })
-            ),
-
-            // Requirements tab
-            activeTab === 'requirements' && React.createElement('div', {
-              className: 'space-y-4'
-            },
-              React.createElement('div', {
-                className: 'bg-orange-50 border border-orange-200 rounded-lg p-4'
-              },
-                React.createElement('h4', {
-                  className: 'font-medium text-orange-900 mb-2'
-                }, 'Selection Requirements'),
-                React.createElement('p', {
-                  className: 'text-sm text-orange-800'
-                }, 'For locked choices: what requirements must be met for the choice to be selectable? The choice will be visible but grayed out until requirements are met.')
-              ),
-
-              React.createElement(ConditionBuilder, {
-                conditions: choiceData.requirements,
-                onConditionsChange: handleRequirementsChange,
-                availableStats,
-                availableFlags,
-                availableItems,
-                availableScenes,
-                onInlineAddFlag
-              })
-            ),
-
-            // Actions tab
-            activeTab === 'actions' && React.createElement('div', {
-              className: 'space-y-4'
-            },
-              React.createElement('div', {
-                className: 'bg-green-50 border border-green-200 rounded-lg p-4'
-              },
-                React.createElement('h4', {
-                  className: 'font-medium text-green-900 mb-2'
-                }, 'Choice Actions'),
-                React.createElement('p', {
-                  className: 'text-sm text-green-800'
-                }, 'Actions to execute when this choice is selected (modify stats, set flags, etc.).')
-              ),
-
-              React.createElement(ActionBuilder, {
-                actions: choiceData.actions,
-                onActionsChange: handleActionsChange,
-                availableStats,
-                availableFlags,
-                availableItems,
-                availableAchievements,
-                onInlineAddFlag,
-                isOneTime: !!choiceData.oneTime,
-                onToggleOneTime: handleToggleOneTime
-              })
-            )
-          )
-        ),
-
-        // Preview panel
-        showPreview && React.createElement('div', {
-          className: 'w-80 border-l bg-gray-50 p-4 overflow-y-auto'
-        },
-          React.createElement('h3', {
-            className: 'font-medium mb-4'
-          }, 'Choice Preview'),
-
-          React.createElement('div', {
-            className: 'space-y-3'
-          },
-            // Choice preview
-            React.createElement('div', {
-              className: `border rounded-lg p-3 bg-white ${
-                choiceData.isSecret ? 'border-purple-300' :
-                choiceData.isLocked ? 'border-orange-300' :
-                choiceData.isHidden ? 'border-blue-300' : 'border-gray-300'
-              }`
-            },
-              React.createElement('div', {
-                className: 'flex items-start justify-between mb-2'
-              },
-                React.createElement('span', {
-                  className: `text-xs px-2 py-1 rounded-full ${
-                    choiceData.isSecret ? 'bg-purple-100 text-purple-800' :
-                    choiceData.isLocked ? 'bg-orange-100 text-orange-800' :
-                    choiceData.isHidden ? 'bg-blue-100 text-blue-800' :
-                    'bg-gray-100 text-gray-800'
-                  }`
-                }, choicePreview.type)
-              ),
-              
-              React.createElement('div', {
-                className: 'font-medium'
-              }, choiceData.text || 'Choice text...'),
-              
-              React.createElement('div', {
-                className: 'text-sm text-gray-600 mt-2'
-              },
-                `→ ${availableScenes.find(s => s.id === choiceData.targetSceneId)?.title || 'No target scene'}`
-              )
-            ),
-
-            // Conditions summary
-            choiceData.conditions.length > 0 && React.createElement('div', {
-              className: 'text-sm'
-            },
-              React.createElement('div', {
-                className: 'font-medium text-blue-700 mb-1'
-              }, `Conditions ${choicePreview.conditionsText}`),
-              React.createElement('div', {
-                className: 'text-gray-600'
-              }, 'Controls visibility/discovery')
-            ),
-
-            // Requirements summary
-            choiceData.requirements.length > 0 && React.createElement('div', {
-              className: 'text-sm'
-            },
-              React.createElement('div', {
-                className: 'font-medium text-orange-700 mb-1'
-              }, `Requirements ${choicePreview.requirementsText}`),
-              React.createElement('div', {
-                className: 'text-gray-600'
-              }, 'Controls selectability')
-            ),
-
-            // Actions summary
-            choicePreview.hasActions && React.createElement('div', {
-              className: 'text-sm'
-            },
-              React.createElement('div', {
-                className: 'font-medium text-green-700 mb-1'
-              }, `${choiceData.actions.length} Action${choiceData.actions.length > 1 ? 's' : ''}`),
-              React.createElement('div', {
-                className: 'text-gray-600'
-              }, 'Execute when selected')
-            )
-          )
-        )
-      ),
-
-      // Footer
-      React.createElement('div', {
-        className: 'flex justify-between items-center p-6 border-t bg-gray-50'
-      },
-        // Validation status
-        React.createElement('div', {
-          className: 'flex-1'
-        },
-          validation.errors.length > 0 && React.createElement('div', {
-            className: 'text-sm text-red-600'
-          },
-            `${validation.errors.length} error${validation.errors.length > 1 ? 's' : ''}: ${validation.errors[0]}`
-          ),
-          
-          validation.warnings.length > 0 && validation.errors.length === 0 && React.createElement('div', {
-            className: 'text-sm text-yellow-600'
-          },
-            `${validation.warnings.length} warning${validation.warnings.length > 1 ? 's' : ''}: ${validation.warnings[0]}`
-          )
-        ),
-
-        // Action buttons
-        React.createElement('div', {
-          className: 'flex gap-3'
-        },
-          React.createElement('button', {
-            onClick: onCancel,
-            className: 'px-4 py-2 text-gray-700 border border-gray-300 rounded-md hover:bg-gray-50 transition-colors'
+            key: 'cancel',
+            className: 'px-3 py-1 text-sm border rounded-md text-gray-700 hover:bg-gray-100',
+            onClick: onCancel
           }, 'Cancel'),
-          
           React.createElement('button', {
-            onClick: handleSave,
-            disabled: !validation.isValid,
-            className: `px-4 py-2 bg-blue-600 text-white rounded-md transition-colors ${
-              validation.isValid 
-                ? 'hover:bg-blue-700' 
-                : 'opacity-50 cursor-not-allowed'
-            }`
+            key: 'save',
+            className: 'px-3 py-1 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700',
+            onClick: attemptSave
           }, 'Save Choice')
-        )
-      )
-    )
-  );
-}
+        ])
+      ]),
 
-// Simple action builder component
-function ActionBuilder({ actions = [], onActionsChange, availableStats = [], availableFlags = [], availableItems = [], availableAchievements = [], onInlineAddFlag = null }) {
-  const handleAddAction = React.useCallback(() => {
-    const newAction = {
-      id: generateActionId(),
-      type: 'set_stat',
-      key: availableStats[0]?.id || '',
-      value: 0,
-      oneTime: false
-    };
-    onActionsChange([...actions, newAction]);
-  }, [actions, onActionsChange, availableStats]);
+      errors.length > 0 && React.createElement('div', {
+        key: 'error-banner',
+        className: 'px-6 py-3 bg-red-50 border-b border-red-200 text-sm text-red-700'
+      }, errors.map((error, index) => React.createElement('div', { key: index }, error))),
 
-  const handleActionUpdate = React.useCallback((index, updates) => {
-    const updatedActions = actions.map((action, i) => 
-      i === index ? { ...action, ...updates } : action
-    );
-    onActionsChange(updatedActions);
-  }, [actions, onActionsChange]);
-
-  const handleActionDelete = React.useCallback((index) => {
-    const updatedActions = actions.filter((_, i) => i !== index);
-    onActionsChange(updatedActions);
-  }, [actions, onActionsChange]);
-
-  return React.createElement('div', {
-    className: 'space-y-3'
-  },
-    React.createElement('div', {
-      className: 'flex justify-between items-center'
-    },
-      React.createElement('h4', {
-        className: 'font-medium'
-      }, 'Actions'),
-      React.createElement('button', {
-        onClick: handleAddAction,
-        className: 'px-3 py-1 text-sm bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors'
-      }, '+ Add Action')
-    ),
-
-    actions.length === 0 ?
       React.createElement('div', {
-        className: 'text-center py-4 text-gray-500 border-2 border-dashed border-gray-300 rounded-lg'
-      }, 'No actions configured') :
-      
-      actions.map((action, index) =>
-        React.createElement('div', {
-          key: action.id || index,
-          className: 'border rounded-lg p-3 bg-white'
-        },
-          React.createElement('div', {
-            className: 'flex items-center gap-3'
-          },
-            React.createElement('select', {
-              value: action.type,
-              onChange: (e) => handleActionUpdate(index, { type: e.target.value }),
-              className: 'px-2 py-1 border rounded text-sm'
-            },
-              React.createElement('option', { value: 'set_stat' }, 'Set Stat'),
-              React.createElement('option', { value: 'add_stat' }, 'Add to Stat'),
-              React.createElement('option', { value: 'multiply_stat' }, 'Multiply Stat'),
-              React.createElement('option', { value: 'set_flag' }, 'Set Flag'),
-              React.createElement('option', { value: 'toggle_flag' }, 'Toggle Flag'),
-              React.createElement('option', { value: 'add_inventory' }, 'Add Inventory'),
-              React.createElement('option', { value: 'remove_inventory' }, 'Remove Inventory'),
-              React.createElement('option', { value: 'set_inventory' }, 'Set Inventory'),
-              React.createElement('option', { value: 'add_achievement' }, 'Unlock Achievement')
-            ),
+        key: 'tabs',
+        className: 'px-6 pt-4 flex space-x-4 border-b bg-white'
+      }, ['basic', 'behavior', 'conditions', 'requirements', 'actions', 'metadata'].map(tab =>
+        React.createElement('button', {
+          key: tab,
+          onClick: () => setActiveTab(tab),
+          className: `pb-2 text-sm font-medium border-b-2 transition-colors ${activeTab === tab ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`
+        }, tab.charAt(0).toUpperCase() + tab.slice(1))
+      )),
 
-            // Key selector: stats vs flags
-            action.type === 'set_flag' || action.type === 'toggle_flag' ?
-              React.createElement('div', { className: 'flex-1 flex items-center gap-2' }, [
-                React.createElement('select', {
-                  key: 'flag-select',
-                  value: action.key || '',
-                  onChange: (e) => handleActionUpdate(index, { key: e.target.value }),
-                  className: 'flex-1 px-2 py-1 border rounded text-sm'
-                }, [
-                  React.createElement('option', { key: 'empty', value: '' }, 'Select flag...'),
-                  ...availableFlags.map(f => React.createElement('option', { key: f.id, value: f.id }, f.name || f.id))
-                ]),
-                React.createElement('button', {
-                  key: 'add-flag-inline',
-                  className: 'px-2 py-1 text-xs bg-green-100 text-green-700 rounded hover:bg-green-200',
-                  onClick: () => {
-                    if (typeof onInlineAddFlag === 'function') {
-                      onInlineAddFlag((newFlag) => {
-                        handleActionUpdate(index, { key: newFlag.id });
-                      });
-                    }
-                  },
-                  title: 'Create a new flag'
-                }, '+ Add Flag')
-              ])
-            : action.type === 'add_inventory' || action.type === 'remove_inventory' || action.type === 'set_inventory' ?
-              React.createElement('select', {
-                value: action.key || '',
-                onChange: (e) => handleActionUpdate(index, { key: e.target.value }),
-                className: 'flex-1 px-2 py-1 border rounded text-sm'
-              }, [
-                React.createElement('option', { key: 'empty', value: '' }, 'Select item...'),
-                ...availableItems.map(item => React.createElement('option', { key: item.id, value: item.id }, item.name))
-              ])
-            : action.type === 'add_achievement' ?
-              React.createElement('select', {
-                value: action.key || '',
-                onChange: (e) => handleActionUpdate(index, { key: e.target.value }),
-                className: 'flex-1 px-2 py-1 border rounded text-sm'
-              }, [
-                React.createElement('option', { key: 'empty', value: '' }, 'Select achievement...'),
-                ...availableAchievements.map(a => React.createElement('option', { key: a.id, value: a.id }, a.name || a.id))
-              ])
-            :
-              React.createElement('select', {
-                value: action.key,
-                onChange: (e) => handleActionUpdate(index, { key: e.target.value }),
-                className: 'flex-1 px-2 py-1 border rounded text-sm'
-              },
-                React.createElement('option', { value: '' }, 'Select...'),
-                (action.type.includes('stat') ? availableStats : availableFlags).map(item =>
-                  React.createElement('option', {
-                    key: item.id,
-                    value: item.id
-                  }, item.name)
-                )
-              ),
-
-            // Value field cadence by action type
-            action.type === 'set_flag' ?
-              React.createElement('select', {
-                value: action.value,
-                onChange: (e) => handleActionUpdate(index, { value: e.target.value === 'true' }),
-                className: 'w-20 px-2 py-1 border rounded text-sm'
-              },
-                React.createElement('option', { value: 'true' }, 'True'),
-                React.createElement('option', { value: 'false' }, 'False')
-              )
-            : action.type === 'toggle_flag' || action.type === 'add_achievement' ? null
-            : (action.type === 'set_stat' || action.type === 'add_stat' || action.type === 'multiply_stat' || action.type === 'set_inventory' || action.type === 'add_inventory' || action.type === 'remove_inventory') ?
-              React.createElement('input', {
-                type: 'number',
-                value: action.value,
-                onChange: (e) => handleActionUpdate(index, { value: Number(e.target.value) }),
-                className: 'w-20 px-2 py-1 border rounded text-sm'
-              }) : null,
-
-            // Per-action one-time toggle
-            React.createElement('label', { className: 'ml-auto flex items-center gap-1 text-xs text-yellow-800 bg-yellow-50 px-2 py-1 rounded border border-yellow-200' }, [
-              React.createElement('input', {
-                type: 'checkbox',
-                checked: !!action.oneTime,
-                onChange: (e) => handleActionUpdate(index, { oneTime: e.target.checked })
-              }),
-              'One-time'
-            ]),
-
-            React.createElement('button', {
-              onClick: () => handleActionDelete(index),
-              className: 'p-1 text-red-600 hover:text-red-800'
-            }, '🗑️')
-          )
-        )
-      )
+      React.createElement('div', {
+        key: 'content',
+        className: 'flex-1 overflow-y-auto px-6 py-4 space-y-6'
+      }, [
+        activeTab === 'basic' && renderBasicTab({ choiceData, availableScenes, handleFieldChange }),
+        activeTab === 'behavior' && renderBehaviorTab({
+          choiceData,
+          handleToggle,
+          handleFieldChange,
+          handleInputTypeChange,
+          handleInputConfigChange,
+          handleAddOption,
+          handleOptionChange,
+          handleRemoveOption,
+          isChoiceScriptMode,
+          inputTypeOptions
+        }),
+        activeTab === 'conditions' && renderConditionsTab({
+          choiceData,
+          handleConditionsChange,
+          availableStats,
+          availableFlags,
+          availableItems,
+          availableScenes,
+          onInlineAddFlag
+        }),
+        activeTab === 'requirements' && renderRequirementsTab({
+          choiceData,
+          handleConditionsChange,
+          availableStats,
+          availableFlags,
+          availableItems,
+          availableScenes,
+          onInlineAddFlag
+        }),
+        activeTab === 'actions' && renderActionsTab({
+          choiceData,
+          availableStats,
+          availableFlags,
+          availableItems,
+          availableAchievements,
+          onInlineAddFlag,
+          addAction,
+          updateAction,
+          removeAction
+        }),
+        activeTab === 'metadata' && renderMetadataTab({ choiceData, handleFieldChange })
+      ])
+    ]))
   );
 }
 
-const generateChoiceId = () => {
-  return `choice_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
-};
+function renderBasicTab({ choiceData, availableScenes, handleFieldChange }) {
+  return React.createElement('div', { className: 'space-y-4' }, [
+    React.createElement('div', { key: 'text' }, [
+      React.createElement('label', { className: 'block text-sm font-medium text-gray-700 mb-1' }, 'Choice Text'),
+      React.createElement('p', { className: 'text-xs text-gray-500 mb-2' }, 'Supports inline HTML for formatting. Plain text will be auto-escaped.'),
+      React.createElement('textarea', {
+        value: choiceData.text,
+        onChange: (e) => handleFieldChange('text', e.target.value),
+        className: 'w-full border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500',
+        rows: 4,
+        placeholder: 'Describe the choice the player will see...'
+      })
+    ]),
 
-const generateActionId = () => {
-  return `action_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
-};
+    React.createElement('div', { key: 'target', className: 'grid grid-cols-1 md:grid-cols-2 gap-4' }, [
+      React.createElement('div', { key: 'scene-select' }, [
+        React.createElement('label', { className: 'block text-sm font-medium text-gray-700 mb-1' }, 'Target Scene'),
+        React.createElement('select', {
+          value: choiceData.targetSceneId,
+          onChange: (e) => handleFieldChange('targetSceneId', e.target.value),
+          className: 'w-full border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500'
+        }, [
+          React.createElement('option', { key: 'empty', value: '' }, 'Select target scene...'),
+          ...availableScenes.map(scene => React.createElement('option', { key: scene.id, value: scene.id }, scene.title || scene.id))
+        ])
+      ]),
+
+      React.createElement('div', { key: 'description' }, [
+        React.createElement('label', { className: 'block text-sm font-medium text-gray-700 mb-1' }, 'Short Description (optional)'),
+        React.createElement('input', {
+          value: choiceData.description,
+          onChange: (e) => handleFieldChange('description', e.target.value),
+          className: 'w-full border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500',
+          placeholder: 'Tooltip or additional metadata'
+        })
+      ])
+    ])
+  ]);
+}
+
+function renderBehaviorTab({
+  choiceData,
+  handleToggle,
+  handleFieldChange,
+  handleInputTypeChange,
+  handleInputConfigChange,
+  handleAddOption,
+  handleOptionChange,
+  handleRemoveOption,
+  isChoiceScriptMode = false,
+  inputTypeOptions = INPUT_TYPES
+}) {
+  const config = ensureInputConfig(choiceData.inputType, choiceData.inputConfig);
+  const toggleDisabled = isChoiceScriptMode;
+
+  return React.createElement('div', { className: 'space-y-6' }, [
+    React.createElement('div', { key: 'toggles', className: 'grid grid-cols-1 md:grid-cols-2 gap-4' }, [
+      renderToggle('Hide by default', 'isHidden', choiceData.isHidden, handleToggle('isHidden'), 'Hidden choices require conditions to become visible.', toggleDisabled),
+      renderToggle('Secret choice', 'isSecret', choiceData.isSecret, handleToggle('isSecret'), 'Secret choices auto-hide until discovered.', toggleDisabled),
+      renderToggle('Locked choice', 'isLocked', choiceData.isLocked, handleToggle('isLocked'), 'Locked choices remain visible but unselectable until requirements are met.', toggleDisabled),
+      renderToggle('Fake choice (no branching)', 'isFake', choiceData.isFake, handleToggle('isFake'), 'Fake choices continue within the same scene and ignore target scene.', false)
+    ]),
+
+    React.createElement('div', { key: 'input-type' }, [
+      React.createElement('label', { className: 'block text-sm font-medium text-gray-700 mb-1' }, 'Player Interaction'),
+      React.createElement('select', {
+        value: choiceData.inputType,
+        onChange: handleInputTypeChange,
+        className: 'w-full border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500'
+      }, inputTypeOptions.map(option => React.createElement('option', { key: option.value, value: option.value }, option.label)))
+    ]),
+
+    choiceData.inputType === 'input_text' && React.createElement('div', { key: 'text-config', className: 'grid grid-cols-1 md:grid-cols-3 gap-4' }, [
+      renderInputField('Store in variable', config.variable, (value) => handleInputConfigChange('variable', value), 'Variable name to store the text.'),
+      renderInputField('Placeholder (optional)', config.placeholder, (value) => handleInputConfigChange('placeholder', value)),
+      renderNumberField('Max length', config.maxLength, (value) => handleInputConfigChange('maxLength', value))
+    ]),
+
+    choiceData.inputType === 'input_number' && React.createElement('div', { key: 'number-config', className: 'grid grid-cols-1 md:grid-cols-4 gap-4' }, [
+      renderInputField('Store in variable', config.variable, (value) => handleInputConfigChange('variable', value), 'Variable name to store the number.'),
+      renderNumberField('Minimum', config.min, (value) => handleInputConfigChange('min', value)),
+      renderNumberField('Maximum', config.max, (value) => handleInputConfigChange('max', value)),
+      renderNumberField('Step', config.step, (value) => handleInputConfigChange('step', value || 1))
+    ]),
+
+    choiceData.inputType === 'input_choice' && !isChoiceScriptMode && React.createElement('div', { key: 'choice-config', className: 'space-y-3' }, [
+      renderInputField('Store selected option in variable', config.variable, (value) => handleInputConfigChange('variable', value)),
+      React.createElement('div', { key: 'options', className: 'space-y-2' }, [
+        ...config.options.map(option => React.createElement('div', {
+          key: option.id,
+          className: 'grid grid-cols-1 md:grid-cols-3 gap-3 p-3 border rounded-md bg-gray-50'
+        }, [
+          renderInputField('Label', option.label, (value) => handleOptionChange(option.id, { label: value })),
+          renderInputField('Stored value', option.value, (value) => handleOptionChange(option.id, { value: value })),
+          React.createElement('div', { key: 'remove', className: 'flex items-end justify-end' }, [
+            React.createElement('button', {
+              className: 'px-2 py-1 text-xs text-red-600 hover:text-red-800',
+              onClick: () => handleRemoveOption(option.id)
+            }, 'Remove option')
+          ])
+        ])),
+        React.createElement('button', {
+          key: 'add-option',
+          className: 'px-3 py-2 text-sm border rounded-md hover:bg-gray-100',
+          onClick: handleAddOption
+        }, 'Add option')
+      ])
+    ]),
+
+    React.createElement('div', { key: 'limits', className: 'grid grid-cols-1 md:grid-cols-3 gap-4' }, [
+      renderToggle('One-time use', 'oneTime', choiceData.oneTime, handleToggle('oneTime'), 'Choice can only be taken once.', isChoiceScriptMode),
+      renderNumberField('Max uses', choiceData.maxUses, (value) => handleFieldChange('maxUses', value), '0 = unlimited', isChoiceScriptMode),
+      renderNumberField('Cooldown (ms)', choiceData.cooldown, (value) => handleFieldChange('cooldown', value), undefined, isChoiceScriptMode)
+    ])
+  ]);
+}
+
+function renderConditionsTab({
+  choiceData,
+  handleConditionsChange,
+  availableStats,
+  availableFlags,
+  availableItems,
+  availableScenes,
+  onInlineAddFlag
+}) {
+  return React.createElement('div', { className: 'space-y-6' }, [
+    React.createElement('div', { key: 'visibility' }, [
+      React.createElement('h3', { className: 'text-sm font-semibold text-gray-800 mb-2' }, 'Visibility Conditions'),
+      React.createElement('p', { className: 'text-xs text-gray-500 mb-3' }, 'When these conditions pass, the choice becomes visible (unless hidden).'),
+      React.createElement(ConditionBuilder, {
+        conditions: choiceData.conditions,
+        onConditionsChange: handleConditionsChange('conditions'),
+        availableStats,
+        availableFlags,
+        availableItems,
+        availableScenes,
+        onInlineAddFlag
+      })
+    ]),
+    React.createElement('div', { key: 'selectable-if' }, [
+      React.createElement('h3', { className: 'text-sm font-semibold text-gray-800 mb-2' }, 'Selectable If'),
+      React.createElement('p', { className: 'text-xs text-gray-500 mb-3' }, 'Use these conditions to keep the choice visible but disable selection until they are met.'),
+      React.createElement(ConditionBuilder, {
+        conditions: choiceData.selectableIf,
+        onConditionsChange: handleConditionsChange('selectableIf'),
+        availableStats,
+        availableFlags,
+        availableItems,
+        availableScenes,
+        onInlineAddFlag
+      })
+    ])
+  ]);
+}
+
+function renderRequirementsTab({
+  choiceData,
+  handleConditionsChange,
+  availableStats,
+  availableFlags,
+  availableItems,
+  availableScenes,
+  onInlineAddFlag
+}) {
+  return React.createElement('div', { className: 'space-y-3' }, [
+    React.createElement('p', { key: 'intro', className: 'text-xs text-gray-500' }, 'Requirements represent hard gating criteria for locked choices.'),
+    React.createElement(ConditionBuilder, {
+      conditions: choiceData.requirements,
+      onConditionsChange: handleConditionsChange('requirements'),
+      availableStats,
+      availableFlags,
+      availableItems,
+      availableScenes,
+      onInlineAddFlag
+    })
+  ]);
+}
+
+function renderActionsTab({
+  choiceData,
+  availableStats,
+  availableFlags,
+  availableItems,
+  availableAchievements,
+  onInlineAddFlag,
+  addAction,
+  updateAction,
+  removeAction
+}) {
+  return React.createElement('div', { className: 'space-y-4' }, [
+    React.createElement('div', { key: 'actions-header', className: 'flex items-center justify-between' }, [
+      React.createElement('h3', { className: 'text-sm font-semibold text-gray-800' }, 'Actions on selection'),
+      React.createElement('button', {
+        className: 'px-3 py-2 text-sm border rounded-md hover:bg-gray-100',
+        onClick: addAction
+      }, 'Add action')
+    ]),
+    choiceData.actions.length === 0 && React.createElement('div', { key: 'empty', className: 'text-sm text-gray-500 bg-gray-50 border rounded-md px-4 py-6 text-center' }, 'No actions configured.'),
+    choiceData.actions.map((action, index) => React.createElement('div', {
+      key: action.id || index,
+      className: 'border rounded-md p-4 space-y-3 bg-gray-50'
+    }, [
+      React.createElement('div', { key: 'row-1', className: 'grid grid-cols-1 md:grid-cols-4 gap-3' }, [
+        React.createElement('div', { key: 'type' }, [
+          React.createElement('label', { className: 'text-xs uppercase tracking-wide text-gray-500 block mb-1' }, 'Action'),
+          React.createElement('select', {
+            value: action.type,
+            onChange: (e) => updateAction(index, { type: e.target.value }),
+            className: 'w-full border rounded-md px-2 py-1 text-sm'
+          }, ACTION_OPTIONS.map(item => React.createElement('option', { key: item.value, value: item.value }, item.label)))
+        ]),
+        renderActionTargetField(action, index, updateAction, availableStats, availableFlags, availableItems, availableAchievements, onInlineAddFlag),
+        renderActionValueField(action, index, updateAction)
+      ]),
+      React.createElement('div', { key: 'row-2', className: 'flex justify-between items-center text-xs text-gray-500' }, [
+        React.createElement('button', {
+          className: 'text-red-600 hover:text-red-800',
+          onClick: () => removeAction(index)
+        }, 'Remove action')
+      ])
+    ]))
+  ]);
+}
+
+function renderMetadataTab({ choiceData, handleFieldChange }) {
+  return React.createElement('div', { className: 'grid grid-cols-1 md:grid-cols-2 gap-4' }, [
+    React.createElement('div', { key: 'category' }, [
+      React.createElement('label', { className: 'block text-sm font-medium text-gray-700 mb-1' }, 'Category'),
+      React.createElement('input', {
+        value: choiceData.category,
+        onChange: (e) => handleFieldChange('category', e.target.value),
+        className: 'w-full border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500'
+      })
+    ]),
+    React.createElement('div', { key: 'id' }, [
+      React.createElement('label', { className: 'block text-sm font-medium text-gray-700 mb-1' }, 'Choice ID'),
+      React.createElement('input', {
+        value: choiceData.id,
+        onChange: (e) => handleFieldChange('id', e.target.value),
+        className: 'w-full border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500'
+      })
+    ])
+  ]);
+}
+
+function renderToggle(label, field, checked, onChange, helperText, disabled = false) {
+  const className = disabled
+    ? 'flex items-start space-x-3 border p-3 rounded-md bg-gray-100 opacity-60 cursor-not-allowed'
+    : 'flex items-start space-x-3 border p-3 rounded-md bg-gray-50';
+
+  return React.createElement('label', { className }, [
+    React.createElement('input', {
+      type: 'checkbox',
+      className: 'mt-1 h-4 w-4 text-blue-600 border-gray-300 rounded',
+      checked,
+      onChange,
+      disabled
+    }),
+    React.createElement('div', { className: 'flex-1' }, [
+      React.createElement('span', { className: 'block text-sm font-medium text-gray-700' }, label),
+      helperText && React.createElement('span', { className: 'text-xs text-gray-500' }, helperText),
+      disabled && React.createElement('span', { className: 'block text-xs text-red-500 mt-1' }, 'Not available in ChoiceScript mode.')
+    ])
+  ]);
+}
+
+function renderInputField(label, value, onChange, helperText, disabled = false) {
+  const className = disabled
+    ? 'border rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-gray-100 text-gray-500 cursor-not-allowed'
+    : 'border rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500';
+
+  return React.createElement('div', { className: 'flex flex-col space-y-1' }, [
+    label && React.createElement('label', { className: 'text-xs font-semibold text-gray-600 uppercase tracking-wide' }, label),
+    React.createElement('input', {
+      value: value ?? '',
+      onChange: (e) => onChange(e.target.value),
+      className,
+      disabled
+    }),
+    helperText && React.createElement('span', { className: 'text-xs text-gray-400' }, helperText)
+  ]);
+}
+
+function renderNumberField(label, value, onChange, helperText, disabled = false) {
+  const className = disabled
+    ? 'border rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-gray-100 text-gray-500 cursor-not-allowed'
+    : 'border rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500';
+
+  return React.createElement('div', { className: 'flex flex-col space-y-1' }, [
+    label && React.createElement('label', { className: 'text-xs font-semibold text-gray-600 uppercase tracking-wide' }, label),
+    React.createElement('input', {
+      type: 'number',
+      value: value ?? '',
+      onChange: (e) => onChange(e.target.value === '' ? null : Number(e.target.value)),
+      className,
+      disabled
+    }),
+    helperText && React.createElement('span', { className: 'text-xs text-gray-400' }, helperText)
+  ]);
+}
+const ACTION_OPTIONS = [
+  { value: 'set_stat', label: 'Set stat' },
+  { value: 'add_stat', label: 'Add to stat' },
+  { value: 'multiply_stat', label: 'Multiply stat' },
+  { value: 'set_flag', label: 'Set flag' },
+  { value: 'toggle_flag', label: 'Toggle flag' },
+  { value: 'add_inventory', label: 'Add item' },
+  { value: 'remove_inventory', label: 'Remove item' },
+  { value: 'set_inventory', label: 'Set inventory quantity' },
+  { value: 'add_achievement', label: 'Unlock achievement' }
+];
+
+function renderActionTargetField(action, index, updateAction, availableStats, availableFlags, availableItems, availableAchievements, onInlineAddFlag) {
+  switch (action.type) {
+    case 'set_flag':
+    case 'toggle_flag':
+      return React.createElement('div', { key: 'flag', className: 'flex flex-col space-y-1' }, [
+        React.createElement('label', { className: 'text-xs font-semibold text-gray-600 uppercase tracking-wide' }, 'Flag'),
+        React.createElement('div', { className: 'flex space-x-2' }, [
+          React.createElement('select', {
+            value: action.key || '',
+            onChange: (e) => updateAction(index, { key: e.target.value }),
+            className: 'flex-1 border rounded px-2 py-1 text-sm'
+          }, [
+            React.createElement('option', { key: 'empty', value: '' }, 'Select flag...'),
+            ...availableFlags.map(flag => React.createElement('option', { key: flag.id, value: flag.id }, flag.name || flag.id))
+          ]),
+          typeof onInlineAddFlag === 'function' && React.createElement('button', {
+            key: 'add-flag-inline',
+            className: 'px-2 py-1 text-xs border rounded text-green-700 border-green-400 hover:bg-green-50',
+            onClick: () => onInlineAddFlag((newFlag) => updateAction(index, { key: newFlag.id }))
+          }, '+')
+        ])
+      ]);
+    case 'add_inventory':
+    case 'remove_inventory':
+    case 'set_inventory':
+      return React.createElement('div', { key: 'inventory', className: 'flex flex-col space-y-1' }, [
+        React.createElement('label', { className: 'text-xs font-semibold text-gray-600 uppercase tracking-wide' }, 'Item'),
+        React.createElement('select', {
+          value: action.key || '',
+          onChange: (e) => updateAction(index, { key: e.target.value }),
+          className: 'border rounded px-2 py-1 text-sm'
+        }, [
+          React.createElement('option', { key: 'empty', value: '' }, 'Select item...'),
+          ...availableItems.map(item => React.createElement('option', { key: item.id, value: item.id }, item.name || item.id))
+        ])
+      ]);
+    case 'add_achievement':
+      return React.createElement('div', { key: 'achievements', className: 'flex flex-col space-y-1' }, [
+        React.createElement('label', { className: 'text-xs font-semibold text-gray-600 uppercase tracking-wide' }, 'Achievement'),
+        React.createElement('select', {
+          value: action.key || '',
+          onChange: (e) => updateAction(index, { key: e.target.value }),
+          className: 'border rounded px-2 py-1 text-sm'
+        }, [
+          React.createElement('option', { key: 'empty', value: '' }, 'Select achievement...'),
+          ...availableAchievements.map(achievement => React.createElement('option', { key: achievement.id, value: achievement.id }, achievement.name || achievement.id))
+        ])
+      ]);
+    default:
+      return React.createElement('div', { key: 'stat', className: 'flex flex-col space-y-1' }, [
+        React.createElement('label', { className: 'text-xs font-semibold text-gray-600 uppercase tracking-wide' }, 'Stat'),
+        React.createElement('select', {
+          value: action.key || '',
+          onChange: (e) => updateAction(index, { key: e.target.value }),
+          className: 'border rounded px-2 py-1 text-sm'
+        }, [
+          React.createElement('option', { key: 'empty', value: '' }, 'Select stat...'),
+          ...availableStats.map(stat => React.createElement('option', { key: stat.id, value: stat.id }, stat.name || stat.id))
+        ])
+      ]);
+  }
+}
+
+function renderActionValueField(action, index, updateAction) {
+  switch (action.type) {
+    case 'set_flag':
+      return React.createElement('div', { key: 'value', className: 'flex flex-col space-y-1' }, [
+        React.createElement('label', { className: 'text-xs font-semibold text-gray-600 uppercase tracking-wide' }, 'Value'),
+        React.createElement('select', {
+          value: action.value === true ? 'true' : 'false',
+          onChange: (e) => updateAction(index, { value: e.target.value === 'true' }),
+          className: 'border rounded px-2 py-1 text-sm'
+        }, [
+          React.createElement('option', { value: 'true' }, 'True'),
+          React.createElement('option', { value: 'false' }, 'False')
+        ])
+      ]);
+    case 'toggle_flag':
+    case 'add_achievement':
+      return React.createElement('div', { key: 'spacer' });
+    default:
+      return React.createElement('div', { key: 'value', className: 'flex flex-col space-y-1' }, [
+        React.createElement('label', { className: 'text-xs font-semibold text-gray-600 uppercase tracking-wide' }, 'Value'),
+        React.createElement('input', {
+          type: 'number',
+          value: action.value ?? 0,
+          onChange: (e) => updateAction(index, { value: e.target.value === '' ? null : Number(e.target.value) }),
+          className: 'border rounded px-2 py-1 text-sm'
+        })
+      ]);
+  }
+}
+
+function normalizeChoice(choice, { enforceChoiceScript = false } = {}) {
+  const baseChoice = choice || {};
+  const inputType = baseChoice.inputType || 'static';
+  const inputConfig = inputType === 'static' ? {} : ensureInputConfig(inputType, baseChoice.inputConfig);
+
+  const normalized = {
+    ...DEFAULT_CHOICE,
+    ...baseChoice,
+    id: baseChoice.id || generateChoiceId(),
+    inputType,
+    inputConfig,
+    isFake: !!baseChoice.isFake,
+    selectableIf: Array.isArray(baseChoice.selectableIf) ? baseChoice.selectableIf : []
+  };
+
+  if (enforceChoiceScript) {
+    const allowedInputTypes = new Set(['static', 'input_text', 'input_number']);
+    if (!allowedInputTypes.has(normalized.inputType)) {
+      normalized.inputType = 'static';
+      normalized.inputConfig = {};
+    } else {
+      normalized.inputConfig = ensureInputConfig(normalized.inputType, normalized.inputConfig);
+    }
+    normalized.isHidden = false;
+    normalized.isSecret = false;
+    normalized.isLocked = false;
+    normalized.oneTime = false;
+    normalized.maxUses = 0;
+    normalized.cooldown = 0;
+  }
+
+  return normalized;
+}
+function ensureInputConfig(type, config = {}) {
+  if (type === 'static') return {};
+  const defaults = DEFAULT_INPUT_CONFIG[type] || {};
+  return { ...defaults, ...config };
+}
+
+function createDefaultAction() {
+  return {
+    id: `action_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    type: 'set_stat',
+    key: '',
+    value: 0
+  };
+}
+
+function validateChoice(choiceData, existingChoices, originalChoice, availableScenes, { choiceScriptMode = false } = {}) {
+  const errors = [];
+  const warnings = [];
+
+  if (!choiceData.text.trim()) {
+    errors.push('Choice text is required.');
+  }
+
+  if (!choiceData.isFake && !choiceData.targetSceneId) {
+    errors.push('Target scene is required unless the choice is marked as fake.');
+  }
+
+  if (choiceData.targetSceneId && !availableScenes.some(scene => scene.id === choiceData.targetSceneId)) {
+    warnings.push('Target scene does not exist in the current adventure.');
+  }
+
+  if (choiceData.inputType !== 'static') {
+    const config = ensureInputConfig(choiceData.inputType, choiceData.inputConfig);
+
+    if (!config.variable?.trim()) {
+      errors.push('Input choices must define a variable to store player input.');
+    }
+
+    if (choiceData.inputType === 'input_number') {
+      if (config.min != null && config.max != null && Number(config.min) > Number(config.max)) {
+        errors.push('Number input: minimum cannot be greater than maximum.');
+      }
+    }
+
+    if (choiceData.inputType === 'input_choice') {
+      const populated = config.options.filter(option => option.label.trim() && option.value.trim());
+      if (populated.length === 0) {
+        errors.push('Add at least one option for player selection.');
+      }
+      if (choiceScriptMode) {
+        errors.push('ChoiceScript mode does not support inline option inputs.');
+      }
+    }
+  }
+
+  if (choiceScriptMode && (choiceData.maxUses > 0 || choiceData.cooldown > 0)) {
+    warnings.push('Usage limits are ignored in ChoiceScript mode.');
+  }
+
+  if (choiceData.maxUses < 0) {
+    errors.push('Max uses cannot be negative.');
+  }
+
+  if (choiceData.cooldown < 0) {
+    errors.push('Cooldown must be zero or positive.');
+  }
+
+  if (choiceData.isLocked && choiceData.requirements.length === 0) {
+    warnings.push('Locked choices should define at least one requirement.');
+  }
+
+  if (choiceData.isSecret && choiceData.conditions.length === 0) {
+    warnings.push('Secret choices typically include discovery conditions.');
+  }
+
+  const duplicateId = existingChoices
+    .filter(existing => !originalChoice || existing.id !== originalChoice.id)
+    .some(existing => existing.id === choiceData.id);
+
+  if (duplicateId) {
+    errors.push('Choice ID must be unique within the scene.');
+  }
+
+  return {
+    errors,
+    warnings,
+    isValid: errors.length === 0,
+    focusTab: errors.length > 0 ? 'basic' : undefined
+  };
+}
+function finalizeChoice(choiceData) {
+  const payload = {
+    ...choiceData,
+    text: choiceData.text.trim(),
+    description: choiceData.description?.trim() || '',
+    maxUses: Number(choiceData.maxUses) || 0,
+    cooldown: Number(choiceData.cooldown) || 0,
+    selectableIf: choiceData.selectableIf || []
+  };
+
+  if (choiceData.inputType === 'static') {
+    payload.inputConfig = {};
+  } else {
+    payload.inputConfig = ensureInputConfig(choiceData.inputType, choiceData.inputConfig);
+  }
+
+  return payload;
+}
+
+function generateChoiceId() {
+  return `choice_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+}
+
+function generateOptionId() {
+  return `opt_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function generateActionId() {
+  return `action_${Math.random().toString(36).slice(2, 8)}`;
+}
 
 export default AdvancedChoiceDialog;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 

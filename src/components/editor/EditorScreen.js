@@ -30,6 +30,7 @@ import {
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from "https://esm.sh/react@18";
 import { validationService } from '../../services/ValidationService.js';
+import { exportAdventureToChoiceScript } from '../../editor/exporters/ChoiceScriptExporter.js';
 
 export default function EditorScreen({
   onExitEditor = () => {},
@@ -104,6 +105,7 @@ export default function EditorScreen({
   const [showInventoryEditor, setShowInventoryEditor] = useState(false);
   const [showAchievementsEditor, setShowAchievementsEditor] = useState(false);
   const [showStatsEditor, setShowStatsEditor] = useState(false);
+  const [choiceScriptMode, setChoiceScriptMode] = useState(false);
   // Flags editor state
   const [showFlagEditor, setShowFlagEditor] = useState(false);
   const [editingFlag, setEditingFlag] = useState(null);
@@ -1224,627 +1226,60 @@ export default function EditorScreen({
     }
   };
 
-  // Enhanced export with multiple formats
-  const handleExportWithFormat = useCallback((format = 'json') => {
+      // Enhanced export with multiple formats
+  const handleExportWithFormat = useCallback(async (format = "json") => {
     const adventureData = generateAdventureData();
-    
-    let content, filename, mimeType;
-    
+    const sanitizedTitle = (adventure.title || "adventure").replace(/[^a-z0-9]/gi, "_").toLowerCase();
+
+    let content;
+    let filename;
+    let mimeType;
+
     switch (format.toLowerCase()) {
-      case 'yaml':
-        // Simple YAML export (would need proper YAML library in real implementation)
+      case "choicescript": {
+        const result = await exportAdventureToChoiceScript(adventureData);
+        content = result.data;
+        mimeType = "application/zip";
+        filename = `${sanitizedTitle}_choicescript.zip`;
+        if (result.warnings && result.warnings.length > 0) {
+          console.warn("ChoiceScript export warnings:", result.warnings);
+        }
+        break;
+      }
+      case "yaml":
         content = JSON.stringify(adventureData, null, 2)
-          .replace(/"/g, '')
-          .replace(/:/g, ': ')
-          .replace(/,/g, '')
-          .replace(/\{/g, '')
-          .replace(/\}/g, '');
-        filename = `${adventure.title.replace(/[^a-z0-9]/gi, '_')}.yaml`;
-        mimeType = 'text/yaml';
+          .replace(/"/g, "")
+          .replace(/:/g, ": ")
+          .replace(/,/g, "")
+          .replace(/\{/g, "")
+          .replace(/\}/g, "");
+        filename = `${sanitizedTitle}.yaml`;
+        mimeType = "text/yaml";
         break;
-      
-      case 'xml':
-        // Simple XML export
+      case "xml":
         content = `<?xml version="1.0" encoding="UTF-8"?>\n<adventure>\n${JSON.stringify(adventureData, null, 2)}\n</adventure>`;
-        filename = `${adventure.title.replace(/[^a-z0-9]/gi, '_')}.xml`;
-        mimeType = 'text/xml';
+        filename = `${sanitizedTitle}.xml`;
+        mimeType = "text/xml";
         break;
-      
       default:
         content = JSON.stringify(adventureData, null, 2);
-        filename = `${adventure.title.replace(/[^a-z0-9]/gi, '_')}.json`;
-        mimeType = 'application/json';
+        filename = `${sanitizedTitle}.json`;
+        mimeType = "application/json";
+        break;
     }
-    
+
     const dataBlob = new Blob([content], { type: mimeType });
     const url = URL.createObjectURL(dataBlob);
-    
-    const link = document.createElement('a');
+
+    const link = document.createElement("a");
     link.href = url;
     link.download = filename;
+    document.body.appendChild(link);
     link.click();
-    
+    document.body.removeChild(link);
+
     URL.revokeObjectURL(url);
-  }, [adventure, nodes]);
-
-  // Enhanced import with command system
-  const handleImport = useCallback((adventureData) => {
-    const command = new ImportAdventureCommand(
-      adventureData,
-      generateAdventureData(),
-      commandCallbacks.current
-    );
-    
-    executeCommand(command);
-  }, [executeCommand]);
-  
-  // Internal import handler (called by command)
-  const handleImportInternal = useCallback((adventureData) => {
-    try {
-      setAdventure({
-        id: adventureData.id || 'imported_adventure',
-        title: adventureData.title || 'Imported Adventure',
-        author: adventureData.author || '',
-        version: adventureData.version || '1.0.0',
-        description: adventureData.description || '',
-        startSceneId: adventureData.startSceneId,
-        stats: adventureData.stats || [],
-        inventory: adventureData.inventory || [],
-        achievements: adventureData.achievements || [],
-        flags: adventureData.flags || [],
-        categories: adventureData.categories || [],
-        crossGameCompatibility: adventureData.crossGameCompatibility || {
-          version: '2.0',
-          exportableStats: [],
-          exportableFlags: [],
-          exportableItems: []
-        },
-        metadata: {
-          ...adventureData.metadata,
-          modified: Date.now()
-        } || {
-          created: Date.now(),
-          modified: Date.now(),
-          estimatedPlayTime: 30,
-          difficulty: 'medium',
-          genre: ['adventure'],
-          language: 'en'
-        }
-      });
-
-      const importedNodes = new Map();
-      (adventureData.scenes || []).forEach(scene => {
-        importedNodes.set(scene.id, {
-          ...scene,
-          position: scene.position || { x: Math.random() * 400 + 100, y: Math.random() * 400 + 100 },
-          isStartScene: scene.id === adventureData.startSceneId,
-          // Ensure Phase 3 properties exist
-          tags: scene.tags || [],
-          category: scene.category || 'general',
-          requiredItems: scene.requiredItems || []
-        });
-      });
-      
-      setNodes(importedNodes);
-      setSelectedNodeId(null);
-    } catch (error) {
-      alert('Error importing adventure: ' + error.message);
-      throw error;
-    }
-  }, []);
-  
-  // Update command callback to use internal handler
-  useEffect(() => {
-    if (commandCallbacks.current) {
-      commandCallbacks.current.onAdventureImport = handleImportInternal;
-    }
-  }, [handleImportInternal]);
-  
-  // Keyboard shortcuts for undo/redo
-  useEffect(() => {
-    const handleKeyDown = (event) => {
-      // Check if we're in an input field - don't intercept if so
-      const isInputField = event.target.tagName === 'INPUT' || 
-                          event.target.tagName === 'TEXTAREA' || 
-                          event.target.contentEditable === 'true';
-                          
-      if (isInputField) return;
-      
-      // Handle Ctrl+Z (Undo)
-      if (event.ctrlKey && event.key === 'z' && !event.shiftKey) {
-        event.preventDefault();
-        if (canUndo) {
-          handleUndo();
-        }
-        return;
-      }
-      
-      // Handle Ctrl+Y or Ctrl+Shift+Z (Redo)
-      if ((event.ctrlKey && event.key === 'y') || 
-          (event.ctrlKey && event.shiftKey && event.key === 'z')) {
-        event.preventDefault();
-        if (canRedo) {
-          handleRedo();
-        }
-        return;
-      }
-      
-      // Handle Ctrl+H (Show/Hide Command History)
-      if (event.ctrlKey && event.key === 'h' && !event.shiftKey) {
-        event.preventDefault();
-        setCommandHistoryVisible(prev => !prev);
-        return;
-      }
-      
-      // Handle Ctrl+S (Manual Save)
-      if (event.ctrlKey && event.key === 's' && !event.shiftKey) {
-        event.preventDefault();
-        handleManualSave();
-        return;
-      }
-      
-      // Handle Ctrl+F (Search Panel)
-      if (event.ctrlKey && event.key === 'f' && !event.shiftKey) {
-        event.preventDefault();
-        setSearchPanelVisible(prev => !prev);
-        return;
-      }
-    };
-    
-    // Add event listener to document
-    document.addEventListener('keydown', handleKeyDown);
-    
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [canUndo, canRedo, handleUndo, handleRedo]);
-  
-  // Manual save handler
-  const handleManualSave = useCallback(async () => {
-    if (!currentProject) {
-      // No current project - create new one
-      const projectName = prompt('Save as new project (enter name):', adventure.title);
-      if (!projectName) return;
-      
-      try {
-        const adventureData = generateAdventureData();
-        const newProject = await editorSession.createNewProject({
-          name: projectName,
-          data: { adventureData }
-        });
-        
-        setCurrentProject(newProject);
-        setLastSaved(newProject.created);
-        setHasUnsavedChanges(false);
-        alert('Project saved successfully!');
-      } catch (error) {
-        alert(`Failed to save project: ${error.message}`);
-      }
-    } else {
-      // Save existing project
-      try {
-        const adventureData = generateAdventureData();
-        await editorSession.forceSave(currentProject.id, {
-          title: adventure.title,
-          data: { adventureData }
-        });
-        
-        setLastSaved(Date.now());
-        setHasUnsavedChanges(false);
-        
-        // Show brief confirmation
-        const statusElement = document.querySelector('[data-save-status]');
-        if (statusElement) {
-          statusElement.textContent = 'Saved!';
-          setTimeout(() => {
-            statusElement.textContent = '';
-          }, 1500);
-        }
-      } catch (error) {
-        alert(`Failed to save project: ${error.message}`);
-      }
-    }
-  }, [currentProject, adventure.title, editorSession, generateAdventureData]);
-  
-  // Search panel handlers
-  const handleSearchNavigate = useCallback((nodeId, matchData) => {
-    setSelectedNodeId(nodeId);
-    
-    // Center on the selected node
-    const node = nodes.get(nodeId);
-    if (node && node.position) {
-      // Focus on the node by updating viewport if needed
-      // This would typically require canvas integration
-      console.log('Navigating to node:', nodeId, matchData);
-    }
-  }, [nodes]);
-  
-  const handleSearchHighlight = useCallback((highlightData) => {
-    setSearchHighlights(highlightData);
-  }, []);
-  
-  const handleSearchReplace = useCallback((replacements) => {
-    // Apply all replacements using command system
-    const commands = [];
-    
-    replacements.forEach(replacement => {
-      const node = nodes.get(replacement.nodeId);
-      if (!node) return;
-      
-      let updatedText = replacement.original.replace(replacement.match, replacement.replacement);
-      
-      if (replacement.type === 'title') {
-        const command = new UpdateNodeCommand(
-          replacement.nodeId,
-          'title',
-          node.title,
-          updatedText,
-          commandCallbacks.current
-        );
-        commands.push(command);
-      } else if (replacement.type === 'content') {
-        const command = new UpdateNodeCommand(
-          replacement.nodeId,
-          'content',
-          node.content,
-          updatedText,
-          commandCallbacks.current
-        );
-        commands.push(command);
-      } else if (replacement.type === 'choice' && replacement.choiceId) {
-        const choice = node.choices?.find(c => c.id === replacement.choiceId);
-        if (choice) {
-          const command = new UpdateChoiceCommand(
-            replacement.nodeId,
-            replacement.choiceId,
-            'text',
-            choice.text,
-            updatedText,
-            commandCallbacks.current
-          );
-          commands.push(command);
-        }
-      }
-    });
-    
-    // Execute all commands as a bulk operation
-    if (commands.length > 0) {
-      const bulkCommand = new BulkOperationCommand(
-        commands,
-        `Replace ${commands.length} occurrences`,
-        commandCallbacks.current
-      );
-      executeCommand(bulkCommand);
-    }
-  }, [nodes, executeCommand]);
-  
-  // Listen for action history and search panel events
-  useEffect(() => {
-    const handleShowActionHistory = () => {
-      setCommandHistoryVisible(true);
-    };
-    
-    const handleShowSearchPanel = () => {
-      setSearchPanelVisible(true);
-    };
-    
-    window.addEventListener('showActionHistory', handleShowActionHistory);
-    window.addEventListener('showSearchPanel', handleShowSearchPanel);
-    
-    return () => {
-      window.removeEventListener('showActionHistory', handleShowActionHistory);
-      window.removeEventListener('showSearchPanel', handleShowSearchPanel);
-    };
-  }, []);
-
-  // Enhanced validation with Phase 3 features
-  const validateAdventure = useCallback(() => {
-    const errors = [];
-    const warnings = [];
-
-    if (!adventure.startSceneId || !nodes.has(adventure.startSceneId)) {
-      errors.push('No valid start scene defined');
-    }
-
-    // Validate inventory items
-    adventure.inventory?.forEach((item, index) => {
-      if (!item.id || !item.name || !item.category) {
-        errors.push(`Inventory item ${index + 1} is missing required fields`);
-      }
-    });
-
-    // Validate achievements
-    adventure.achievements?.forEach((achievement, index) => {
-      if (!achievement.id || !achievement.name || !achievement.conditions) {
-        errors.push(`Achievement ${index + 1} is missing required fields`);
-      }
-    });
-
-    for (const [nodeId, node] of nodes) {
-      if (!node.title?.trim()) {
-        warnings.push(`Scene "${nodeId}" has no title`);
-      }
-      if (!node.content?.trim()) {
-        warnings.push(`Scene "${nodeId}" has no content`);
-      }
-
-      node.choices?.forEach((choice, index) => {
-        if (!choice.text?.trim()) {
-          errors.push(`Scene "${node.title || nodeId}" choice ${index + 1} has no text`);
-        }
-        if (choice.targetSceneId && !nodes.has(choice.targetSceneId)) {
-          errors.push(`Scene "${node.title || nodeId}" choice "${choice.text}" targets non-existent scene`);
-        }
-        
-        // Validate secret choices
-        if (choice.isSecret && (!choice.secretConditions || choice.secretConditions.length === 0)) {
-          warnings.push(`Secret choice "${choice.text}" in scene "${node.title || nodeId}" has no discovery conditions`);
-        }
-        
-        // Validate locked choices
-        if (choice.isLocked && (!choice.requirements || choice.requirements.length === 0)) {
-          warnings.push(`Locked choice "${choice.text}" in scene "${node.title || nodeId}" has no requirements`);
-        }
-      });
-    }
-
-    setValidationErrors(errors);
-    setValidationWarnings(warnings);
-    return { errors, warnings };
-  }, [adventure, nodes]);
-
-  // Subscribe to ValidationService events so the error tracker updates in real time
-  useEffect(() => {
-    const handleValidationComplete = ({ adventure: adv, result }) => {
-      if (!result) return;
-      // Map result entries to simple strings for toolbar display (keep full objects internally if needed later)
-      const errors = (result.errors || []).map(e => (typeof e === 'string' ? e : e.message || JSON.stringify(e)));
-      const warnings = (result.warnings || []).map(w => (typeof w === 'string' ? w : w.message || JSON.stringify(w)));
-
-      setValidationErrors(errors);
-      setValidationWarnings(warnings);
-    };
-
-    const handleValidationError = ({ error }) => {
-      setValidationErrors([`Validation system error: ${error?.message || String(error)}`]);
-      setValidationWarnings([]);
-    };
-
-    validationService.on('validation-complete', handleValidationComplete);
-    validationService.on('validation-cached', handleValidationComplete);
-    validationService.on('validation-error', handleValidationError);
-
-    return () => {
-      validationService.off('validation-complete', handleValidationComplete);
-      validationService.off('validation-cached', handleValidationComplete);
-      validationService.off('validation-error', handleValidationError);
-    };
-  }, []);
-
-  // Auto-validate (debounced) when nodes or adventure change so toolbar updates live
-  useEffect(() => {
-    if (validationDebounceRef.current) {
-      clearTimeout(validationDebounceRef.current);
-    }
-
-    validationDebounceRef.current = setTimeout(() => {
-      try {
-        const adv = generateAdventureData();
-        // Fire-and-forget; ValidationService will emit events we subscribed to above
-        validationService.validate(adv, { realTimeMode: true, includeContext: false }).catch(() => {});
-      } catch (e) {
-        // ignore
-      }
-    }, 400);
-
-    return () => {
-      if (validationDebounceRef.current) clearTimeout(validationDebounceRef.current);
-    };
-  }, [nodes, adventure]);
-
-  // Context menu operations
-  const handleNodeContextMenu = useCallback((nodeId, position, nodeData) => {
-    setContextMenu({
-      isOpen: true,
-      position: position,
-      nodeId: nodeId,
-      nodeData: nodeData
-    });
-  }, []);
-
-  const handleCloseContextMenu = useCallback(() => {
-    setContextMenu({
-      isOpen: false,
-      position: { x: 0, y: 0 },
-      nodeId: null,
-      nodeData: null
-    });
-  }, []);
-
-  // ...generateConnections is declared earlier to avoid TDZ
-
-  // Memoized connection data for rendering performance
-  const connectionArray = useMemo(() => {
-    return Array.from(connections.values());
-  }, [connections]);
-
-  // Intelligently handle connection generation based on changes
-  useEffect(() => {
-    if (nodes.size > 0) {
-      // Check if this is initial load or a structural change
-      const hasConnectionsForAllNodes = Array.from(nodes.keys()).every(nodeId =>
-  connectionCacheEarly.current.has(`${nodeId}_version`)
-      );
-
-      if (!hasConnectionsForAllNodes) {
-        // Full regeneration needed for initial load or major changes
-        generateConnections();
-      }
-    } else {
-      // Clear connections when no nodes
-      setConnections(new Map());
-  connectionCacheEarly.current.clear();
-    }
-  }, [nodes.size, generateConnections]);
-
-  // Enhanced choice operations with command system
-  const handleChoiceAdd = useCallback((nodeId) => {
-    const choiceId = `choice_${Date.now()}`;
-    const newChoice = {
-      id: choiceId,
-      text: 'New Choice',
-      targetSceneId: '',
-      conditions: [],
-      actions: [],
-      isHidden: false,
-      isSecret: false,
-      isLocked: false,
-      requirements: [],
-      consequences: [],
-      priority: 0,
-        oneTime: false,
-        maxUses: 0,
-        cooldown: 0
-    };
-
-    const command = new CreateChoiceCommand(
-      nodeId,
-      newChoice,
-      commandCallbacks.current
-    );
-    
-    executeCommand(command);
-  }, [executeCommand]);
-
-  const handleChoiceUpdate = useCallback((nodeId, choiceId, updates) => {
-    const node = nodes.get(nodeId);
-    if (!node) return;
-
-    const choice = node.choices.find(c => c.id === choiceId);
-    if (!choice) return;
-
-    // Create commands for each property update
-    const commands = [];
-
-    for (const [property, newValue] of Object.entries(updates)) {
-      const oldValue = choice[property];
-      if (oldValue !== newValue) {
-        commands.push(new UpdateChoiceCommand(
-          nodeId,
-          choiceId,
-          property,
-          oldValue,
-          newValue,
-          commandCallbacks.current
-        ));
-      }
-    }
-    
-    if (commands.length === 1) {
-      executeCommand(commands[0]);
-    } else if (commands.length > 1) {
-      // Execute multiple choice updates as a batch
-      executeCommand(commands[0]); // For now, execute individually
-      for (let i = 1; i < commands.length; i++) {
-        setTimeout(() => executeCommand(commands[i]), i * 10);
-      }
-    }
-  }, [nodes, executeCommand]);
-
-  const handleChoiceDelete = useCallback((nodeId, choiceId) => {
-    const command = new DeleteChoiceCommand(
-      nodeId,
-      choiceId,
-      { nodes, connections },
-      commandCallbacks.current
-    );
-    
-    executeCommand(command);
-  }, [nodes, connections, executeCommand]);
-
-  // Dialog operations
-  const closeDialog = useCallback(() => {
-    setActiveDialog(null);
-    setDialogData(null);
-  }, []);
-
-  const handleSceneSave = useCallback((updatedScene) => {
-    handleNodeUpdate(updatedScene.id, updatedScene);
-    closeDialog();
-  }, [handleNodeUpdate, closeDialog]);
-
-  const handleChoiceSave = useCallback((updatedChoice) => {
-    if (dialogData?.nodeId) {
-      handleChoiceUpdate(dialogData.nodeId, updatedChoice.id, updatedChoice);
-    }
-    closeDialog();
-  }, [dialogData, handleChoiceUpdate, closeDialog]);
-
-  // Inventory management
-  const handleInventoryUpdate = useCallback((newInventory) => {
-    setAdventure(prev => ({
-      ...prev,
-      inventory: newInventory,
-      metadata: { ...prev.metadata, modified: Date.now() }
-    }));
-    setHasUnsavedChanges(true);
-  }, []);
-
-  // Stats management with command system
-  const handleStatAdd = useCallback(() => {
-    const statId = `stat_${Date.now()}`;
-    const newStat = {
-      id: statId,
-      name: 'New Stat',
-      type: 'number',
-      defaultValue: 0,
-      min: 0,
-      max: 100,
-      hidden: false,
-      category: 'general',
-      description: '',
-      noExport: false
-    };
-
-    const command = new UpdateStatsCommand(
-      'add',
-      newStat,
-      adventure.stats,
-      commandCallbacks.current
-    );
-    
-    executeCommand(command);
-  }, [adventure.stats, executeCommand]);
-
-  const handleStatUpdate = useCallback((statId, updates) => {
-    const oldStat = adventure.stats.find(s => s.id === statId);
-    if (!oldStat) return;
-    
-    const updatedStat = { ...oldStat, ...updates };
-    const command = new UpdateStatsCommand(
-      'update',
-      updatedStat,
-      adventure.stats,
-      commandCallbacks.current
-    );
-    
-    executeCommand(command);
-  }, [adventure.stats, executeCommand]);
-
-  const handleStatDelete = useCallback((statId) => {
-    const statToDelete = adventure.stats.find(s => s.id === statId);
-    if (!statToDelete) return;
-    
-    const command = new UpdateStatsCommand(
-      'delete',
-      statToDelete,
-      adventure.stats,
-      commandCallbacks.current
-    );
-    
-    executeCommand(command);
-  }, [adventure.stats, executeCommand]);
-
+  }, [generateAdventureData, adventure.title]);
   const selectedNode = selectedNodeId ? nodes.get(selectedNodeId) : null;
 
   return React.createElement('div', {
@@ -1863,7 +1298,7 @@ export default function EditorScreen({
       autoSaveEnabled: autoSaveEnabled,
       lastSaved: lastSaved,
       hasUnsavedChanges: hasUnsavedChanges,
-      exportFormats: ['json', 'yaml', 'xml'],
+      exportFormats: exportFormatOptions,
       sessionStorage: editorSession,
       onProjectListRefresh: loadProjectList,
       onNewAdventure: async (projectName) => {
@@ -1877,7 +1312,7 @@ export default function EditorScreen({
         }
       },
       onImportAdventure: handleImport,
-      onExportAdventure: () => handleExportWithFormat('json'),
+      onExportAdventure: () => handleExportWithFormat(choiceScriptMode ? 'choicescript' : 'json'),
       onExportFormat: handleExportWithFormat,
       onAddScene: () => handleNodeCreate({ x: 200, y: 200 }),
       onDeleteSelected: () => {
@@ -1910,7 +1345,9 @@ export default function EditorScreen({
       redoDescription: redoDescription,
       onUndo: handleUndo,
       onRedo: handleRedo,
-      commandHistory: commandHistory
+      commandHistory: commandHistory,
+      isChoiceScriptMode: choiceScriptMode,
+      onChoiceScriptModeToggle: handleChoiceScriptModeToggle
     }),
 
     React.createElement('div', {
@@ -1938,6 +1375,7 @@ export default function EditorScreen({
         selectedNode: selectedNode,
         adventureStats: adventure.stats,
         adventureInventory: adventure.inventory,
+      choiceScriptMode: choiceScriptMode,
         adventureAchievements: adventure.achievements,
         adventureFlags: adventure.flags,
     availableScenes: Array.from(nodes.values()),
@@ -1952,7 +1390,8 @@ export default function EditorScreen({
         onOpenChoiceDialog: (nodeId, choiceId) => openAdvancedChoiceDialog(nodeId, choiceId),
         onOpenInventoryEditor: () => setShowInventoryEditor(true),
         onOpenAchievementsEditor: () => setShowAchievementsEditor(true),
-        onOpenFlagsEditor: () => { setShowFlagEditor(true); setEditingFlag(null); }
+        onOpenFlagsEditor: () => { setShowFlagEditor(true); setEditingFlag(null); },
+        isChoiceScriptMode: choiceScriptMode
       })
     ]),
 
@@ -1970,6 +1409,7 @@ export default function EditorScreen({
       scene: activeDialog === 'scene' ? dialogData : null,
       adventureStats: adventure.stats,
       adventureInventory: adventure.inventory,
+      choiceScriptMode: choiceScriptMode,
       adventureFlags: adventure.flags,
       onInlineAddFlag: handleInlineAddFlag,
       onSave: handleSceneSave,
@@ -1987,6 +1427,7 @@ export default function EditorScreen({
       isOpen: activeDialog === 'advanced-choice',
       choice: activeDialog === 'advanced-choice' ? dialogData?.choice : null,
       availableScenes: activeDialog === 'advanced-choice' ? dialogData?.availableScenes || [] : [],
+      isChoiceScriptMode: choiceScriptMode,
       availableStats: adventure.stats || [],
       availableFlags: adventure.flags || [],
       availableItems: adventure.inventory || [],
@@ -2063,6 +1504,8 @@ export default function EditorScreen({
       key: 'action-history-dialog',
       isOpen: commandHistoryVisible,
       commandHistory: commandHistory,
+      isChoiceScriptMode: choiceScriptMode,
+      onChoiceScriptModeToggle: handleChoiceScriptModeToggle,
       onClose: () => setCommandHistoryVisible(false),
       onJumpToCommand: async (commandIndex) => {
         try {
@@ -2090,3 +1533,12 @@ export default function EditorScreen({
     })
   ]);
 }
+
+
+
+
+
+
+
+
+

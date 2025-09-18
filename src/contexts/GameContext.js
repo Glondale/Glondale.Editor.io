@@ -424,6 +424,7 @@ export function GameProvider({ children }) {
           choiceId: choice.id,
           sceneId: scene.id,
           choiceText: choice.text,
+                inputValue: submission?.inputValue ?? null,
           discoveryMethod: 'condition_met'
         }
       });
@@ -455,7 +456,7 @@ export function GameProvider({ children }) {
       }
     },
 
-    makeChoice: (choiceId) => {
+    makeChoice: (choiceId, submission = {}) => {
       if (isChoosingRef.current) {
         // Ignore rapid repeat clicks while processing a choice
         return;
@@ -471,7 +472,7 @@ export function GameProvider({ children }) {
         const wasLocked = choice?.evaluation?.state === 'LOCKED';
         
         // Make the choice in the story engine
-        const newScene = storyEngine.makeChoice(choiceId);
+        const newScene = storyEngine.makeChoice(choiceId, submission);
         
         console.log('Choice result - new scene:', newScene?.id);
         
@@ -487,6 +488,7 @@ export function GameProvider({ children }) {
                 sceneId: currentSceneId, 
                 choiceId,
                 choiceText: choice.text,
+                inputValue: submission?.inputValue ?? null,
                 wasSecret,
                 wasLocked
               } 

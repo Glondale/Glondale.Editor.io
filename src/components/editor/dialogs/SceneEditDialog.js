@@ -616,6 +616,9 @@ export default function SceneEditDialog({
             React.createElement('label', {
               className: 'block text-sm font-medium text-gray-700 mb-1'
             }, 'Scene Content'),
+            React.createElement('p', {
+              className: 'text-xs text-gray-500 mb-2'
+            }, 'Supports inline HTML for formatting. Unsafe tags are removed automatically.'),
             React.createElement('textarea', {
               value: formData.content,
               onChange: (e) => handleFieldChange('content', e.target.value),
@@ -866,6 +869,7 @@ export default function SceneEditDialog({
       availableStats: adventureStats,
       availableFlags: adventureFlags,
       availableItems: adventureInventory,
+      isChoiceScriptMode: choiceScriptMode,
       onInlineAddFlag,
       onSave: saveConditions,
       onCancel: () => {
@@ -883,6 +887,7 @@ export default function SceneEditDialog({
       availableStats: adventureStats,
       availableFlags: adventureFlags,
       availableItems: adventureInventory,
+      isChoiceScriptMode: choiceScriptMode,
       onSave: saveChoice,
       onCancel: () => {
         setShowAdvancedChoiceDialog(false);
@@ -891,3 +896,9 @@ export default function SceneEditDialog({
     })
   ]);
 }
+
+
+
+
+
+

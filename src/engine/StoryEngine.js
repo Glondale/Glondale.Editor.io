@@ -217,7 +217,7 @@ export class StoryEngine {
   }
 
   // Make a choice with enhanced validation
-  makeChoice(choiceId) {
+  makeChoice(choiceId, submission = {}) {
     console.log('StoryEngine: Making choice:', choiceId);
     
     if (!this.currentScene) {
@@ -255,14 +255,25 @@ export class StoryEngine {
       return null;
     }
 
+    if (!evaluation.isSelectable) {
+      console.warn('StoryEngine: Choice is not selectable:', choice.text);
+      if (evaluation.lockReasons) {
+        console.warn('StoryEngine: Non-selectable reasons:', evaluation.lockReasons);
+      }
+      return null;
+    }
+
     // Record choice in history
     const choiceRecord = {
       sceneId: this.currentScene.id,
       choiceId: choice.id,
+      inputValue: submission?.inputValue ?? null,
       timestamp: Date.now()
     };
     this.choiceHistory.push(choiceRecord);
     this.choiceEvaluator.updateChoiceHistory(this.choiceHistory);
+
+    this._applyChoiceInput(choice, submission, evaluation);
 
     // Execute choice actions (including inventory actions)
     if (choice.actions && choice.actions.length > 0) {
@@ -270,13 +281,72 @@ export class StoryEngine {
       this.executeActions(choice.actions);
     }
 
-    // Navigate to target scene
+    // Navigate to target scene or remain in place for fake choices
     if (!choice.targetSceneId) {
+      if (choice.isFake) {
+        this.choiceEvaluator.clearCache();
+        this.discoverSecretChoices();
+        return this.currentScene;
+      }
+
       console.error('StoryEngine: Choice has no targetSceneId');
       return null;
     }
 
+    if (choice.isFake) {
+      this.choiceEvaluator.clearCache();
+      this.discoverSecretChoices();
+      return this.currentScene;
+    }
+
     return this.navigateToScene(choice.targetSceneId);
+  }
+
+  _applyChoiceInput(choice, submission = {}, evaluation = {}) {
+    const inputType = evaluation?.inputType || choice?.inputType || 'static';
+    if (!inputType || inputType === 'static') {
+      return;
+    }
+
+    const config = evaluation?.inputConfig || choice?.inputConfig || {};
+    const variable = config?.variable;
+    if (!variable) {
+      console.warn('StoryEngine: Input choice missing variable configuration');
+      return;
+    }
+
+    let value = submission?.inputValue;
+
+    switch (inputType) {
+      case 'input_number': {
+        let numeric = Number(value);
+        if (Number.isNaN(numeric)) {
+          numeric = config.min != null ? Number(config.min) : 0;
+        }
+        if (typeof config.min === 'number') {
+          numeric = Math.max(config.min, numeric);
+        }
+        if (typeof config.max === 'number') {
+          numeric = Math.min(config.max, numeric);
+        }
+        value = numeric;
+        break;
+      }
+      case 'input_choice': {
+        if (!value && Array.isArray(config.options) && config.options.length > 0) {
+          value = config.options[0].value ?? config.options[0].label ?? config.options[0].id ?? '';
+        }
+        break;
+      }
+      case 'input_text':
+      default: {
+        value = value != null ? String(value) : '';
+        break;
+      }
+    }
+
+    console.log('StoryEngine: Capturing player input', { inputType, variable, value });
+    this.statsManager.setStat(variable, value);
   }
 
   // Execute actions with inventory support
@@ -644,3 +714,8 @@ export class StoryEngine {
     this.startTime = Date.now();
   }
 }
+
+
+
+
+

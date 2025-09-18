@@ -58,6 +58,10 @@ export class ChoiceEvaluator {
 
     const result = this._performEvaluation(choice, discoveredSecrets);
 
+    if (result) {
+      this._decorateEvaluation(choice, result);
+    }
+
     // Enforce usage limits (one-time, maxUses, cooldown) on selectable results
     if (result && result.isSelectable) {
       const usageLock = this._applyUsageLimits(choice);
@@ -161,6 +165,50 @@ export class ChoiceEvaluator {
     }
 
     return null;
+  }
+
+  _decorateEvaluation(choice, evaluation) {
+    if (!evaluation) return null;
+
+    evaluation.inputType = choice?.inputType || 'static';
+    evaluation.inputConfig = choice?.inputConfig || {};
+    evaluation.isFake = !!choice?.isFake;
+
+    if (Array.isArray(choice?.selectableIf) && choice.selectableIf.length > 0) {
+      this._applySelectableIf(choice, evaluation);
+    } else {
+      evaluation.selectableIfMet = true;
+    }
+
+    return evaluation;
+  }
+
+  _applySelectableIf(choice, evaluation) {
+    const selectableIf = Array.isArray(choice?.selectableIf) ? choice.selectableIf : [];
+    if (selectableIf.length === 0) return evaluation;
+
+    const conditionsMet = this.conditionParser.evaluateConditions(selectableIf);
+    evaluation.selectableIfMet = conditionsMet;
+
+    if (!conditionsMet) {
+      evaluation.isSelectable = false;
+      if (evaluation.type !== 'HIDDEN') {
+        evaluation.type = 'LOCKED';
+      }
+      if (evaluation.state !== 'HIDDEN') {
+        evaluation.state = 'LOCKED';
+      }
+      const reason = 'Selectable conditions not met';
+      if (Array.isArray(evaluation.lockReasons)) {
+        if (!evaluation.lockReasons.includes(reason)) {
+          evaluation.lockReasons.push(reason);
+        }
+      } else {
+        evaluation.lockReasons = [reason];
+      }
+    }
+
+    return evaluation;
   }
 
   /**
@@ -443,3 +491,6 @@ export class ChoiceEvaluator {
       .map(result => result.choice.id);
   }
 }
+
+
+

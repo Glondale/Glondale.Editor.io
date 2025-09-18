@@ -1,8 +1,7 @@
- 
 import React, { createElement, useMemo } from "https://esm.sh/react@18";
+import sanitizeHtml from '../../utils/sanitizeHtml.js';
 
 export function SceneDisplay({ scene, className = '' }) {
-  // Memoize formatted content for performance
   const formattedContent = useMemo(() => {
     return scene ? formatSceneContent(scene.content) : '';
   }, [scene?.content]);
@@ -18,35 +17,40 @@ export function SceneDisplay({ scene, className = '' }) {
   return createElement('div', {
     className: `p-6 bg-white rounded-lg shadow-sm border ${className}`
   }, [
-    // Scene Title
     createElement('h2', {
       key: 'title',
       className: 'text-2xl font-bold text-gray-900 mb-4'
     }, scene.title),
 
-    // Scene Content
     createElement('div', {
       key: 'content',
       className: 'prose max-w-none'
     }, createElement('div', {
-      className: 'text-gray-700 leading-relaxed whitespace-pre-wrap',
-      dangerouslySetInnerHTML: { 
-        __html: formattedContent
-      }
+      className: 'text-gray-700 leading-relaxed',
+      dangerouslySetInnerHTML: { __html: formattedContent }
     }))
   ]);
 }
 
-// Helper function to format scene content
-export function formatSceneContent(content) {
-  // Basic formatting - convert line breaks to HTML
-  return content
-    .replace(/\n\n/g, '</p><p>')
+export function formatSceneContent(content = '') {
+  if (!content) return '';
+
+  const hasHtml = /<\/?[a-z][\s\S]*>/i.test(content);
+  const processed = hasHtml ? content : convertPlainTextToHtml(content);
+
+  return sanitizeHtml(processed);
+}
+
+function convertPlainTextToHtml(text) {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/\r\n/g, '\n')
+    .replace(/\n\n+/g, '</p><p>')
     .replace(/\n/g, '<br>')
     .replace(/^/, '<p>')
     .replace(/$/, '</p>')
-    // Bold text **text**
     .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-    // Italic text *text*
     .replace(/\*(.*?)\*/g, '<em>$1</em>');
 }

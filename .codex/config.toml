@@ -1,0 +1,7 @@
+full-auto = true
+bypass-approvals = true
+bypass-sandbox = true
+trusted-workspace = true
+approval_policy = “on-request”
+model_reasoning_effort = “high”
+model_reasoning_summary = “detailed”

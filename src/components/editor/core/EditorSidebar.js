@@ -267,3 +267,5 @@ export default function EditorSidebar({
     }, activeTab === 'scene' ? renderSceneProperties() : renderDataManager())
   ]);
 }
+
+
