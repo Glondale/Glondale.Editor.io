@@ -10,6 +10,7 @@ const EditorCanvas = memo(function EditorCanvas({
   nodes = new Map(), 
   connections = new Map(), 
   selectedNodeId = null,
+  highlightedNodeIds = new Set(),
   onNodeSelect = () => {},
   onNodeMove = () => {},
   // Called continuously during drag for immediate visual feedback (should update node position without creating history entries)
@@ -160,7 +161,7 @@ const EditorCanvas = memo(function EditorCanvas({
         visibleNodes.push([nodeId, node]);
       }
     }
-    
+
     return visibleNodes;
   }, [nodes, viewport, canvasRef.current?.getBoundingClientRect(), enableAdvancedCulling]);
 
@@ -343,9 +344,9 @@ const EditorCanvas = memo(function EditorCanvas({
         x: viewport.x + deltaX,
         y: viewport.y + deltaY
       };
-      
+
       setViewport(prev => ({ ...prev, ...newViewport }));
-      
+
       setDragState(prev => ({
         ...prev,
         startPos: { x: e.clientX, y: e.clientY }
@@ -416,22 +417,27 @@ const EditorCanvas = memo(function EditorCanvas({
 
   // Render node - enhanced for start scene indication
   const renderNode = (nodeId, node) => {
-    const screenPos = canvasToScreen(node.position.x, node.position.y);
+    const screenPos = { x: node.position.x, y: node.position.y }; // world space
     const isSelected = nodeId === selectedNodeId;
     const isStartScene = node.isStartScene || false; // NEW: Start scene indicator
-    
+    const isHighlighted = highlightedNodeIds.has(nodeId);
+
+    const borderClass = isSelected
+      ? 'border-blue-500 shadow-blue-200'
+      : isHighlighted
+        ? 'border-yellow-400 shadow-yellow-200'
+        : isStartScene
+          ? 'border-green-500 shadow-green-200'
+          : 'border-gray-300 hover:border-gray-400';
+
     return React.createElement('div', {
       key: nodeId,
-      className: `absolute border-2 rounded-lg p-3 bg-white shadow-lg cursor-move select-none transition-all ${
-        isSelected ? 'border-blue-500 shadow-blue-200' : 
-        isStartScene ? 'border-green-500 shadow-green-200' : 
-        'border-gray-300 hover:border-gray-400'
-      }`,
+      className: `absolute border-2 rounded-lg p-3 bg-white shadow-lg cursor-move select-none transition-all ${borderClass}`,
       style: {
         left: `${screenPos.x}px`,
         top: `${screenPos.y}px`,
-        width: `${200 * viewport.zoom}px`,
-        height: `${100 * viewport.zoom}px`,
+        width: `200px`,
+        height: `100px`,
   // Note: left/top already account for zoom via canvasToScreen, avoid extra CSS transform
   // transform and transformOrigin removed to keep pointer coordinates consistent
       }
@@ -467,7 +473,7 @@ const EditorCanvas = memo(function EditorCanvas({
       cursor: dragState.isDragging && dragState.dragType === 'canvas' ? 'grabbing' : 'grab'
     }
   }, [
-    // Grid background
+    // Grid background (screen space)
     React.createElement('div', {
       key: 'grid',
       className: 'absolute inset-0 opacity-20',
@@ -481,18 +487,27 @@ const EditorCanvas = memo(function EditorCanvas({
       }
     }),
 
-    // SVG overlay for connections
-    React.createElement('svg', {
-      key: 'connections',
+    // World container (applies pan/zoom to nodes and connections together)
+    React.createElement('div', {
+      key: 'world',
       className: 'absolute inset-0',
-      style: { 
-        zIndex: 50,
-        pointerEvents: 'none',
-        width: '100%',
-        height: '100%',
-        overflow: 'visible'
+      style: {
+        zIndex: 1,
+        transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.zoom})`,
+        transformOrigin: '0 0'
       }
     }, [
+      // SVG overlay for connections (world space)
+      React.createElement('svg', {
+        key: 'connections',
+        className: 'absolute inset-0',
+        style: { 
+          pointerEvents: 'none',
+          width: '100%',
+          height: '100%',
+          overflow: 'visible'
+        }
+      }, [
       React.createElement('defs', {
         key: 'defs'
       }, React.createElement('marker', {
@@ -509,7 +524,7 @@ const EditorCanvas = memo(function EditorCanvas({
         d: 'M0,0 L0,6 L9,3 z'
       }))),
 
-      // Render connections using ConnectionLine component (only visible ones)
+      // Render connections using ConnectionLine component (world space)
       ...getVisibleConnections.map(([connectionId, connection]) => {
         const fromNode = nodes.get(connection.fromNodeId);
         const toNode = nodes.get(connection.toNodeId);
@@ -519,8 +534,8 @@ const EditorCanvas = memo(function EditorCanvas({
             connection: connection,
             fromNode: fromNode,
             toNode: toNode,
-            zoom: viewport.zoom,
-            viewport: viewport,
+            zoom: 1,
+            viewport: { x: 0, y: 0, zoom: 1 },
             isSelected: false,
             onClick: () => console.log('Connection clicked:', connection.id),
             onDelete: () => console.log('Delete connection:', connection.id)
@@ -528,14 +543,14 @@ const EditorCanvas = memo(function EditorCanvas({
         }
         return null;
       }).filter(Boolean)
-    ]),
+      ]),
 
-    // Node layer
-    React.createElement('div', {
-      key: 'nodes',
-      className: 'absolute inset-0',
-      style: { zIndex: 2 }
-    }, getVisibleNodes.map(([nodeId, node]) => renderNode(nodeId, node))),
+      // Node layer (world space)
+      React.createElement('div', {
+        key: 'nodes',
+        className: 'absolute inset-0'
+      }, getVisibleNodes.map(([nodeId, node]) => renderNode(nodeId, node)))
+    ]),
 
     // Ghost overlay for dragging
     ghost && React.createElement('div', {

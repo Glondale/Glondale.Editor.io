@@ -22,18 +22,14 @@ const ConnectionLine = memo(function ConnectionLine({
   const choice = connection?.choice || { text: 'Unknown Choice', conditions: [] };
   const connectionId = connection?.id || 'unknown';
 
-  // Convert canvas coordinates to screen coordinates
-  const canvasToScreen = (canvasX, canvasY) => {
-    return {
-      x: canvasX * viewport.zoom + viewport.x,
-      y: canvasY * viewport.zoom + viewport.y
-    };
-  };
+  // World-transform is applied at parent; positions are already in world space
+  const canvasToScreen = (x, y) => ({ x, y });
 
   // Calculate node centers and connection points - FIXED VERSION
   const getConnectionPoints = () => {
+    // Keep these in sync with EditorCanvas renderNode dimensions
     const nodeWidth = 200;
-    const nodeHeight = 120;
+    const nodeHeight = 100;
     
     // Calculate centers in canvas coordinates first
     const fromCenterCanvas = {
@@ -82,7 +78,7 @@ const ConnectionLine = memo(function ConnectionLine({
     const distance = Math.sqrt(dx * dx + dy * dy);
     
     // Control points for curve - use viewport zoom instead of zoom prop
-    const curveFactor = Math.min(distance * 0.3, 100 * viewport.zoom);
+    const curveFactor = Math.min(distance * 0.3, 100);
     const cp1x = from.x + (dx > 0 ? curveFactor : -curveFactor);
     const cp1y = from.y;
     const cp2x = to.x - (dx > 0 ? curveFactor : -curveFactor);
@@ -102,7 +98,7 @@ const ConnectionLine = memo(function ConnectionLine({
     if (isPreview) {
       return {
         stroke: '#94a3b8',
-        strokeWidth: 2 * viewport.zoom,
+        strokeWidth: 2,
         strokeDasharray: '5,5',
         opacity: 0.7
       };
@@ -111,7 +107,7 @@ const ConnectionLine = memo(function ConnectionLine({
     if (isSelected) {
       return {
         stroke: '#3b82f6',
-        strokeWidth: 3 * viewport.zoom,
+        strokeWidth: 3,
         opacity: 1
       };
     }
@@ -119,14 +115,14 @@ const ConnectionLine = memo(function ConnectionLine({
     if (isHovered) {
       return {
         stroke: '#1f2937',
-        strokeWidth: 2.5 * viewport.zoom,
+        strokeWidth: 2.5,
         opacity: 1
       };
     }
     
     return {
       stroke: '#6b7280',
-      strokeWidth: 2 * viewport.zoom,
+      strokeWidth: 2,
       opacity: 0.8
     };
   };
@@ -138,7 +134,7 @@ const ConnectionLine = memo(function ConnectionLine({
 
   // Calculate label position (midpoint of curve) - use viewport zoom
   const labelX = (from.x + to.x) / 2;
-  const labelY = (from.y + to.y) / 2 - 10 * viewport.zoom;
+  const labelY = (from.y + to.y) / 2 - 10;
 
   return React.createElement('g', {
     className: `connection-line ${className}`,
@@ -177,6 +173,7 @@ const ConnectionLine = memo(function ConnectionLine({
       strokeDasharray: lineStyles.strokeDasharray || 'none',
       opacity: lineStyles.opacity,
       markerEnd: `url(#${arrowMarkerId})`,
+      vectorEffect: 'non-scaling-stroke',
       className: 'cursor-pointer'
     }),
 
@@ -197,14 +194,14 @@ const ConnectionLine = memo(function ConnectionLine({
       // Label background
       React.createElement('rect', {
         key: 'label-bg',
-        x: labelX - (choice.text.length * 3 * viewport.zoom),
-        y: labelY - 8 * viewport.zoom,
-        width: choice.text.length * 6 * viewport.zoom,
-        height: 16 * viewport.zoom,
+        x: labelX - (choice.text.length * 3),
+        y: labelY - 8,
+        width: choice.text.length * 6,
+        height: 16,
         fill: 'white',
         stroke: lineStyles.stroke,
-        strokeWidth: 1 * viewport.zoom,
-        rx: 3 * viewport.zoom,
+        strokeWidth: 1,
+        rx: 3,
         opacity: isHovered || isSelected ? 1 : 0.9
       }),
       
@@ -212,9 +209,9 @@ const ConnectionLine = memo(function ConnectionLine({
       React.createElement('text', {
         key: 'label-text',
         x: labelX,
-        y: labelY + 2 * viewport.zoom,
+        y: labelY + 2,
         textAnchor: 'middle',
-        fontSize: Math.max(8, 10 * viewport.zoom),
+        fontSize: 10,
         fill: '#374151',
         className: 'pointer-events-none select-none'
       }, choice.text.length > 15 ? choice.text.substring(0, 15) + '...' : choice.text),
@@ -222,12 +219,12 @@ const ConnectionLine = memo(function ConnectionLine({
       // Conditional indicator
       choice.conditions && choice.conditions.length > 0 && React.createElement('circle', {
         key: 'conditional-indicator',
-        cx: labelX + (choice.text.length * 3 * viewport.zoom) + 8 * viewport.zoom,
+        cx: labelX + (choice.text.length * 3) + 8,
         cy: labelY,
-        r: 4 * viewport.zoom,
+        r: 4,
         fill: '#fbbf24',
         stroke: '#f59e0b',
-        strokeWidth: 1 * viewport.zoom,
+        strokeWidth: 1,
         title: `${choice.conditions.length} condition(s)`
       }, [
         React.createElement('title', {

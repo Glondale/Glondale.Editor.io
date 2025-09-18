@@ -12,8 +12,9 @@ import EditorSessionStorage from '../../engine/EditorSessionStorage.js';
 import AdvancedChoiceDialog from './AdvancedChoiceDialog.js';
 import ActionHistoryDialog from './dialogs/ActionHistoryDialog.js';
 import SearchPanel from './panels/SearchPanel.js';
+import SettingsPanel from './panels/SettingsPanel.js';
 import FlagEditor from './dialogs/FlagEditor.js';
-import { commandHistory } from '../../services/CommandHistory.js';
+import { commandHistory, CompositeCommand } from '../../services/CommandHistory.js';
 import {
   CreateNodeCommand,
   DeleteNodeCommand,
@@ -57,6 +58,8 @@ export default function EditorScreen({
   // Search panel state
   const [searchPanelVisible, setSearchPanelVisible] = useState(false);
   const [searchHighlights, setSearchHighlights] = useState([]);
+  const [settingsVisible, setSettingsVisible] = useState(false);
+  const [darkMode, setDarkMode] = useState(false);
 
   // Enhanced adventure state with Phase 3 features
   const [adventure, setAdventure] = useState({
@@ -97,6 +100,39 @@ export default function EditorScreen({
   // Debounce ref for auto validation
   const validationDebounceRef = useRef(null);
 
+  const formatValidationEntry = useCallback((entry) => {
+    if (!entry) return 'Unknown validation issue';
+    if (typeof entry === 'string') return entry;
+    if (entry.message) return entry.message;
+    if (entry.detail) return entry.detail;
+    try {
+      return JSON.stringify(entry);
+    } catch (error) {
+      return String(entry);
+    }
+  }, []);
+
+  const deepEqual = useCallback((a, b) => {
+    if (a === b) return true;
+    try {
+      return JSON.stringify(a) === JSON.stringify(b);
+    } catch (error) {
+      return false;
+    }
+  }, []);
+
+  const replaceSegment = useCallback((source = '', replacement = '', index = 0, match = '') => {
+    if (typeof source !== 'string' || typeof replacement !== 'string') {
+      return source;
+    }
+    if (typeof index !== 'number' || index < 0 || index >= source.length) {
+      return source.replace(match, replacement);
+    }
+    const matchLength = typeof match === 'string' && match.length > 0 ? match.length : 0;
+    const endIndex = matchLength > 0 ? index + matchLength : index + replacement.length;
+    return `${source.slice(0, index)}${replacement}${source.slice(endIndex)}`;
+  }, []);
+
   // Enhanced dialog state with Phase 3 dialogs
   const [activeDialog, setActiveDialog] = useState(null);
   const [dialogData, setDialogData] = useState(null);
@@ -122,6 +158,22 @@ export default function EditorScreen({
 
   // Canvas viewport
   const [canvasViewport, setCanvasViewport] = useState({ x: 0, y: 0, zoom: 1 });
+
+  const exportFormatOptions = useMemo(() => (
+    choiceScriptMode
+      ? ['choicescript', 'json', 'yaml', 'xml']
+      : ['json', 'yaml', 'xml', 'choicescript']
+  ), [choiceScriptMode]);
+
+  const highlightedNodeIds = useMemo(() => {
+    const set = new Set();
+    searchHighlights.forEach(highlight => {
+      if (highlight?.nodeId) {
+        set.add(highlight.nodeId);
+      }
+    });
+    return set;
+  }, [searchHighlights]);
 
   // Initialize command system
   useEffect(() => {
@@ -173,6 +225,41 @@ export default function EditorScreen({
   // Start blank by default (no sample adventure)
   // initializeSampleAdventure();
     }
+  }, []);
+
+  // Toolbar-driven panels (search/history) and auto-save effect
+  useEffect(() => {
+    const handleShowSearch = () => setSearchPanelVisible(true);
+    const handleShowHistory = () => setCommandHistoryVisible(true);
+    const handleHotkeys = (event) => {
+      if (event.defaultPrevented) return;
+      const targetTag = event.target?.tagName;
+      if (targetTag && ['INPUT', 'TEXTAREA'].includes(targetTag)) return;
+      if ((event.ctrlKey || event.metaKey) && !event.shiftKey) {
+        const key = event.key.toLowerCase();
+        if (key === 'f') {
+          event.preventDefault();
+          handleShowSearch();
+        } else if (key === 'h') {
+          event.preventDefault();
+          handleShowHistory();
+        }
+      }
+    };
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('showSearchPanel', handleShowSearch);
+      window.addEventListener('showActionHistory', handleShowHistory);
+      window.addEventListener('keydown', handleHotkeys);
+    }
+
+    return () => {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('showSearchPanel', handleShowSearch);
+        window.removeEventListener('showActionHistory', handleShowHistory);
+        window.removeEventListener('keydown', handleHotkeys);
+      }
+    };
   }, []);
 
   // Auto-save effect
@@ -337,6 +424,40 @@ export default function EditorScreen({
       onExit: []
     };
 
+    const groveRest = {
+      id: 'grove_rest',
+      title: 'Guardian Stones',
+      content: 'You rest beside the guardian stones as their energy restores your strength.',
+      choices: [
+        {
+          id: 'choice_return_from_rest',
+          text: 'Return to the Protected Grove',
+          targetSceneId: 'forest_left',
+          actions: [{ type: 'set_stat', key: 'health', value: 100 }]
+        }
+      ],
+      position: { x: -100, y: 460 },
+      onEnter: [{ type: 'set_stat', key: 'health', value: 100 }],
+      onExit: []
+    };
+
+    const whisperSource = {
+      id: 'whisper_source',
+      title: 'Echoing Clearing',
+      content: 'The whispers converge here, revealing an ancient spirit eager to share forgotten lore.',
+      choices: [
+        {
+          id: 'choice_listen_spirit',
+          text: 'Listen to the spirit',
+          targetSceneId: 'forest_right',
+          actions: [{ type: 'add_stat', key: 'magic_knowledge', value: 10 }]
+        }
+      ],
+      position: { x: 500, y: 460 },
+      onEnter: [{ type: 'add_stat', key: 'magic_knowledge', value: 5 }],
+      onExit: []
+    };
+
     const secretGrove = {
       id: 'secret_grove',
       title: 'Hidden Sanctuary',
@@ -354,6 +475,23 @@ export default function EditorScreen({
       onExit: []
     };
 
+    const treeBlessing = {
+      id: 'tree_blessing',
+      title: 'Silver Tree Blessing',
+      content: 'The silver leaves glow brightly, filling you with renewed purpose.',
+      choices: [
+        {
+          id: 'choice_return_from_blessing',
+          text: 'Return to the sanctuary',
+          targetSceneId: 'secret_grove',
+          actions: [{ type: 'add_stat', key: 'courage', value: 5 }]
+        }
+      ],
+      position: { x: 200, y: 660 },
+      onEnter: [{ type: 'add_stat', key: 'courage', value: 5 }],
+      onExit: []
+    };
+
     // Enhanced adventure with Phase 3 features
     const adventure = {
       id: 'enhanced_sample_adventure',
@@ -362,7 +500,7 @@ export default function EditorScreen({
       version: '2.0.0',
       description: 'An enhanced forest adventure showcasing Phase 3 features including inventory, secrets, and achievements',
       startSceneId: startNode.id,
-      scenes: [startNode, leftNode, rightNode, secretGrove],
+      scenes: [startNode, leftNode, rightNode, groveRest, whisperSource, secretGrove, treeBlessing],
       stats: [
         {
           id: 'health',
@@ -501,7 +639,10 @@ export default function EditorScreen({
         [startNode.id, startNode],
         [leftNode.id, leftNode],
         [rightNode.id, rightNode],
-        [secretGrove.id, secretGrove]
+        [groveRest.id, groveRest],
+        [whisperSource.id, whisperSource],
+        [secretGrove.id, secretGrove],
+        [treeBlessing.id, treeBlessing]
       ]),
       startSceneId: startNode.id,
       adventure: adventure
@@ -973,6 +1114,257 @@ export default function EditorScreen({
     setEditingFlag(null);
     setShowFlagEditor(true);
   }, []);
+
+  const handleChoiceScriptModeToggle = useCallback((enabled) => {
+    setChoiceScriptMode(Boolean(enabled));
+  }, []);
+
+  const handleNodeContextMenu = useCallback((nodeId, position, nodeData) => {
+    const resolvedNode = nodeData || nodes.get(nodeId) || null;
+    setSelectedNodeId(nodeId);
+    setContextMenu({
+      isOpen: true,
+      position,
+      nodeId,
+      nodeData: resolvedNode
+    });
+  }, [nodes]);
+
+  const handleCloseContextMenu = useCallback(() => {
+    setContextMenu(prev => ({ ...prev, isOpen: false }));
+  }, []);
+
+  const handleChoiceAdd = useCallback((nodeId) => {
+    if (!nodeId || !commandCallbacks.current) return;
+    const node = nodes.get(nodeId);
+    if (!node) return;
+
+    const newChoice = {
+      id: `choice_${Date.now()}`,
+      text: 'New Choice',
+      targetSceneId: '',
+      conditions: [],
+      secretConditions: [],
+      actions: [],
+      requirements: [],
+      consequences: [],
+      selectableIf: [],
+      isSecret: false,
+      isHidden: false,
+      isLocked: false,
+      isFake: false,
+      lockReasons: [],
+      inputType: 'static',
+      inputConfig: {},
+      notes: [],
+      priority: 0,
+      category: 'normal'
+    };
+
+    const command = new CreateChoiceCommand(nodeId, newChoice, commandCallbacks.current);
+    executeCommand(command);
+  }, [nodes, executeCommand]);
+
+  const handleChoiceDelete = useCallback((nodeId, choiceId) => {
+    if (!nodeId || !choiceId || !commandCallbacks.current) return;
+    const command = new DeleteChoiceCommand(nodeId, choiceId, { nodes, connections }, commandCallbacks.current);
+    executeCommand(command);
+  }, [connections, executeCommand, nodes]);
+
+  const handleChoiceUpdate = useCallback((nodeId, choiceId, updates = {}) => {
+    if (!nodeId || !choiceId || !commandCallbacks.current) return;
+    const node = nodes.get(nodeId);
+    if (!node) return;
+    const choice = (node.choices || []).find(c => c.id === choiceId);
+    if (!choice) return;
+
+    const commands = [];
+    for (const [property, newValue] of Object.entries(updates)) {
+      const oldValue = choice[property];
+      if (deepEqual(oldValue, newValue)) continue;
+      commands.push(new UpdateChoiceCommand(nodeId, choiceId, property, oldValue, newValue, commandCallbacks.current));
+    }
+
+    if (commands.length === 0) return;
+
+    if (commands.length === 1) {
+      executeCommand(commands[0]);
+      return;
+    }
+
+    const composite = new CompositeCommand(`Update choice: ${choice.text || choiceId}`, commands, {
+      type: 'update_choice_bulk',
+      nodeId,
+      choiceId
+    });
+    executeCommand(composite);
+  }, [commandCallbacks, deepEqual, executeCommand, nodes]);
+
+  const handleChoiceSave = useCallback((updatedChoice) => {
+    if (!dialogData?.nodeId || !updatedChoice?.id) {
+      setActiveDialog(null);
+      setDialogData(null);
+      return;
+    }
+
+    handleChoiceUpdate(dialogData.nodeId, updatedChoice.id, updatedChoice);
+    setActiveDialog(null);
+    setDialogData(null);
+  }, [dialogData, handleChoiceUpdate]);
+
+  const handleSceneSave = useCallback((updatedScene) => {
+    if (!updatedScene?.id) {
+      setActiveDialog(null);
+      setDialogData(null);
+      return;
+    }
+
+    const nodeId = updatedScene.id;
+    const currentNode = nodes.get(nodeId);
+    if (!currentNode || !commandCallbacks.current) {
+      setActiveDialog(null);
+      setDialogData(null);
+      return;
+    }
+
+    const updates = {};
+    Object.entries(updatedScene).forEach(([key, value]) => {
+      if (key === 'id') return;
+      if (!deepEqual(currentNode[key], value)) {
+        updates[key] = value;
+      }
+    });
+
+    if (Object.keys(updates).length > 0) {
+      const bulk = new BulkOperationCommand('update_nodes', [
+        {
+          nodeId,
+          updates,
+          oldValues: currentNode
+        }
+      ], commandCallbacks.current, { editorState: { nodes, connections } });
+      executeCommand(bulk);
+      setAdventure(prev => ({
+        ...prev,
+        scenes: Array.isArray(prev.scenes)
+          ? prev.scenes.map(scene => scene.id === nodeId ? { ...scene, ...updatedScene } : scene)
+          : prev.scenes,
+        metadata: { ...prev.metadata, modified: Date.now() }
+      }));
+      generateConnections(nodeId);
+    } else {
+      // ensure connections refresh even when only metadata changed
+      generateConnections(nodeId);
+    }
+
+    setActiveDialog(null);
+    setDialogData(null);
+  }, [connections, deepEqual, executeCommand, nodes, setAdventure, generateConnections]);
+
+  const handleInventoryUpdate = useCallback((newInventory = []) => {
+    setAdventure(prev => ({
+      ...prev,
+      inventory: Array.isArray(newInventory) ? newInventory : [],
+      metadata: { ...prev.metadata, modified: Date.now() }
+    }));
+    setHasUnsavedChanges(true);
+  }, []);
+
+  const handleSearchHighlight = useCallback((highlights = []) => {
+    setSearchHighlights(Array.isArray(highlights) ? highlights : []);
+  }, []);
+
+  useEffect(() => {
+    if (!searchPanelVisible) {
+      setSearchHighlights([]);
+    }
+  }, [searchPanelVisible]);
+
+  const handleSearchNavigate = useCallback((nodeId, match) => {
+    if (nodeId) {
+      setSelectedNodeId(nodeId);
+    }
+    if (match?.type === 'choice' && match.choiceId) {
+      // Future enhancement: focus specific choice
+    }
+  }, []);
+
+  const handleSearchReplace = useCallback((replacements = []) => {
+    if (!Array.isArray(replacements) || replacements.length === 0) return;
+
+    const mutatedNodes = new Map(nodes);
+    const affectedNodes = new Set();
+
+    replacements.forEach(({ nodeId, type, replacement, match, index, choiceId }) => {
+      const node = mutatedNodes.get(nodeId);
+      if (!node || typeof replacement !== 'string') return;
+
+      if (type === 'title' && typeof node.title === 'string') {
+        const updatedTitle = replaceSegment(node.title, replacement, index, match);
+        if (node.title !== updatedTitle) {
+          mutatedNodes.set(nodeId, { ...node, title: updatedTitle });
+          affectedNodes.add(nodeId);
+        }
+      } else if (type === 'content' && typeof node.content === 'string') {
+        const updatedContent = replaceSegment(node.content, replacement, index, match);
+        if (node.content !== updatedContent) {
+          mutatedNodes.set(nodeId, { ...node, content: updatedContent });
+          affectedNodes.add(nodeId);
+        }
+      } else if (type === 'choice' && choiceId) {
+        const choices = node.choices || [];
+        const updatedChoices = choices.map(choice => {
+          if (choice.id !== choiceId || typeof choice.text !== 'string') {
+            return choice;
+          }
+          const updatedText = replaceSegment(choice.text, replacement, index, match);
+          if (choice.text === updatedText) {
+            return choice;
+          }
+          affectedNodes.add(nodeId);
+          return { ...choice, text: updatedText };
+        });
+        if (affectedNodes.has(nodeId)) {
+          mutatedNodes.set(nodeId, { ...node, choices: updatedChoices });
+        }
+      }
+    });
+
+    if (affectedNodes.size === 0) return;
+
+    setNodes(mutatedNodes);
+    affectedNodes.forEach(nodeId => {
+      updateNodeVersion(nodeId);
+    });
+    generateConnections(Array.from(affectedNodes));
+    setAdventure(prev => ({
+      ...prev,
+      scenes: Array.isArray(prev.scenes)
+        ? prev.scenes.map(scene => {
+            if (!affectedNodes.has(scene.id)) return scene;
+            const updatedNode = mutatedNodes.get(scene.id);
+            return updatedNode ? { ...scene, ...updatedNode } : scene;
+          })
+        : prev.scenes,
+      metadata: { ...prev.metadata, modified: Date.now() }
+    }));
+    setHasUnsavedChanges(true);
+  }, [generateConnections, nodes, replaceSegment, setAdventure, updateNodeVersion]);
+
+  const handleStatUpdate = useCallback((statId, updates = {}) => {
+    const existing = adventure.stats.find(stat => stat.id === statId);
+    if (!existing) return;
+    const updatedStat = { ...existing, ...updates };
+    const command = new UpdateStatsCommand('update', updatedStat, adventure.stats, commandCallbacks.current);
+    executeCommand(command);
+  }, [adventure.stats, commandCallbacks, executeCommand]);
+
+  const handleStatDelete = useCallback((statId) => {
+    const existing = adventure.stats.find(stat => stat.id === statId);
+    if (!existing) return;
+    const command = new UpdateStatsCommand('delete', existing, adventure.stats, commandCallbacks.current);
+    executeCommand(command);
+  }, [adventure.stats, commandCallbacks, executeCommand]);
   
   const handleConnectionCreateCommand = useCallback(async (connectionData) => {
     setConnections(prev => new Map(prev.set(connectionData.id, connectionData)));
@@ -986,9 +1378,183 @@ export default function EditorScreen({
     });
   }, []);
   
+  const handleImport = useCallback((incomingData) => {
+    try {
+      const data = incomingData?.adventureData ? incomingData.adventureData : incomingData;
+      if (!data || typeof data !== 'object') {
+        throw new Error('Invalid adventure data payload');
+      }
+
+      const rawScenes = Array.isArray(data.scenes) ? data.scenes : [];
+      const sceneIdMap = new Map();
+      const usedSceneIds = new Set();
+
+      rawScenes.forEach((scene, index) => {
+        const originalId = typeof scene?.id === 'string' && scene.id.trim() ? scene.id.trim() : null;
+        const fallbackId = `scene_${index + 1}`;
+        let candidateId = originalId || fallbackId;
+        let counter = 2;
+        while (!candidateId || usedSceneIds.has(candidateId)) {
+          candidateId = `${originalId || fallbackId}_${counter}`;
+          counter += 1;
+        }
+        usedSceneIds.add(candidateId);
+        if (originalId) {
+          sceneIdMap.set(originalId, candidateId);
+        }
+        sceneIdMap.set(`__index_${index}`, candidateId);
+      });
+
+      const nodesFromImport = new Map();
+      const connectionsFromImport = new Map();
+
+      rawScenes.forEach((scene, index) => {
+        const fallbackId = `scene_${index + 1}`;
+        const originalId = typeof scene?.id === 'string' && scene.id.trim() ? scene.id.trim() : null;
+        const nodeId = sceneIdMap.get(originalId || `__index_${index}`) || fallbackId;
+
+        const normalizedChoices = Array.isArray(scene?.choices)
+          ? scene.choices.map((choice, choiceIndex) => {
+              const choiceId = typeof choice?.id === 'string' && choice.id.trim()
+                ? choice.id.trim()
+                : `choice_${nodeId}_${choiceIndex + 1}`;
+              const targetOriginal = typeof choice?.targetSceneId === 'string' && choice.targetSceneId.trim()
+                ? choice.targetSceneId.trim()
+                : '';
+              const targetSceneId = targetOriginal
+                ? sceneIdMap.get(targetOriginal) || targetOriginal
+                : '';
+              return {
+                ...choice,
+                id: choiceId,
+                text: choice?.text || `Option ${choiceIndex + 1}`,
+                targetSceneId
+              };
+            })
+          : [];
+
+        const nodePosition = (scene?.position && typeof scene.position.x === 'number' && typeof scene.position.y === 'number')
+          ? scene.position
+          : { x: 200 + (index % 5) * 220, y: 120 + Math.floor(index / 5) * 180 };
+
+        nodesFromImport.set(nodeId, {
+          ...scene,
+          id: nodeId,
+          title: scene?.title || `Scene ${index + 1}`,
+          content: scene?.content || '',
+          choices: normalizedChoices,
+          position: nodePosition,
+          onEnter: Array.isArray(scene?.onEnter) ? scene.onEnter : [],
+          onExit: Array.isArray(scene?.onExit) ? scene.onExit : [],
+          isStartScene: false
+        });
+      });
+
+      let resolvedStartSceneId = null;
+      if (data.startSceneId) {
+        resolvedStartSceneId = sceneIdMap.get(data.startSceneId) || (nodesFromImport.has(data.startSceneId) ? data.startSceneId : null);
+      }
+      if (!resolvedStartSceneId && nodesFromImport.size > 0) {
+        resolvedStartSceneId = nodesFromImport.keys().next().value;
+      }
+
+      nodesFromImport.forEach((node, nodeId) => {
+        const isStartScene = nodeId === resolvedStartSceneId;
+        if (node.isStartScene !== isStartScene) {
+          nodesFromImport.set(nodeId, { ...node, isStartScene });
+        }
+
+        node.choices?.forEach(choice => {
+          if (choice.targetSceneId && nodesFromImport.has(choice.targetSceneId)) {
+            const connectionId = `${nodeId}_${choice.id}_${choice.targetSceneId}`;
+            connectionsFromImport.set(connectionId, {
+              id: connectionId,
+              fromNodeId: nodeId,
+              toNodeId: choice.targetSceneId,
+              choiceId: choice.id,
+              choice
+            });
+          }
+        });
+      });
+
+      const sanitizedScenes = Array.from(nodesFromImport.values()).map(({ isStartScene, ...sceneData }) => sceneData);
+
+      const mergedAdventure = {
+        ...adventure,
+        ...data,
+        startSceneId: resolvedStartSceneId || null,
+        scenes: sanitizedScenes,
+        stats: Array.isArray(data.stats) ? data.stats : [],
+        inventory: Array.isArray(data.inventory) ? data.inventory : [],
+        achievements: Array.isArray(data.achievements) ? data.achievements : [],
+        flags: Array.isArray(data.flags) ? data.flags : [],
+        categories: Array.isArray(data.categories) ? data.categories : [],
+        crossGameCompatibility: {
+          ...adventure.crossGameCompatibility,
+          ...(data.crossGameCompatibility || {})
+        },
+        metadata: {
+          ...adventure.metadata,
+          ...(data.metadata || {}),
+          modified: Date.now()
+        }
+      };
+
+      commandHistory.clear();
+      updateCommandState();
+      connectionCacheEarly.current.clear();
+      nodeVersionsEarly.current.clear();
+      lastNodeChangeTimestampEarly.current.clear();
+
+      setAdventure(mergedAdventure);
+      setNodes(nodesFromImport);
+      setConnections(connectionsFromImport);
+      setSelectedNodeId(resolvedStartSceneId || null);
+      setContextMenu(prev => ({ ...prev, isOpen: false }));
+      setActiveDialog(null);
+      setDialogData(null);
+      setHasUnsavedChanges(false);
+    } catch (error) {
+      console.error('Failed to import adventure:', error);
+      alert(`Failed to import adventure: ${error.message}`);
+    }
+  }, [adventure, updateCommandState]);
+
   const handleAdventureImportCommand = useCallback(async (adventureData) => {
     handleImport(adventureData);
-  }, []);
+  }, [handleImport]);
+
+  const validateAdventure = useCallback(async (options = {}) => {
+    const adventureData = generateAdventureData();
+    if (validationDebounceRef.current) {
+      clearTimeout(validationDebounceRef.current);
+      validationDebounceRef.current = null;
+    }
+
+    try {
+      const result = await validationService.validate(adventureData, {
+        scope: 'editor',
+        enableFixes: false,
+        includeContext: false,
+        skipCache: false,
+        ...options
+      });
+
+      setValidationErrors((result.errors || []).map(formatValidationEntry));
+      setValidationWarnings((result.warnings || []).map(formatValidationEntry));
+      return result;
+    } catch (error) {
+      console.error('EditorScreen: Adventure validation failed', error);
+      const fallback = {
+        errors: [{ message: `Validation failed: ${error.message}` }],
+        warnings: []
+      };
+      setValidationErrors([`Validation failed: ${error.message}`]);
+      setValidationWarnings([]);
+      return fallback;
+    }
+  }, [generateAdventureData, formatValidationEntry]);
   
   const handleAdventureClearCommand = useCallback(async () => {
     setNodes(new Map());
@@ -1139,6 +1705,11 @@ export default function EditorScreen({
     }
   }, [nodes]);
 
+  const closeDialog = useCallback(() => {
+    setActiveDialog(null);
+    setDialogData(null);
+  }, []);
+
   // Enhanced project operations
   const handleNewProject = async (projectName) => {
     try {
@@ -1283,7 +1854,7 @@ export default function EditorScreen({
   const selectedNode = selectedNodeId ? nodes.get(selectedNodeId) : null;
 
   return React.createElement('div', {
-    className: `editor-screen h-screen flex flex-col bg-gray-100 ${className}`
+    className: `editor-screen h-screen flex flex-col ${darkMode ? 'bg-gray-900 text-gray-100' : 'bg-gray-100 text-gray-900'} ${className}`
   }, [
     React.createElement(EditorToolbar, {
       key: 'toolbar',
@@ -1301,6 +1872,9 @@ export default function EditorScreen({
       exportFormats: exportFormatOptions,
       sessionStorage: editorSession,
       onProjectListRefresh: loadProjectList,
+      onOpenSettings: () => setSettingsVisible(true),
+      isDarkMode: darkMode,
+      onToggleDarkMode: (v) => setDarkMode(!!v),
       onNewAdventure: async (projectName) => {
         if (!hasUnsavedChanges || confirm('Create new adventure? Unsaved changes will be lost.')) {
           if (projectName) {
@@ -1320,8 +1894,9 @@ export default function EditorScreen({
           handleNodeDelete(selectedNodeId);
         }
       },
-      onPlayTest: () => {
-        const { errors } = validateAdventure();
+      onPlayTest: async () => {
+        const result = await validateAdventure({ skipCache: true, scope: 'runtime' });
+        const errors = Array.isArray(result?.errors) ? result.errors : [];
         if (errors.length > 0) {
           alert('Fix validation errors before play testing');
         } else {
@@ -1329,7 +1904,9 @@ export default function EditorScreen({
           onPlayTest(adventureData);
         }
       },
-      onValidate: validateAdventure,
+      onValidate: () => {
+        validateAdventure({ skipCache: false });
+      },
       onSaveEditor: handleSaveProject,
       onLoadEditor: handleLoadProject,
       onAutoSaveToggle: (enabled) => {
@@ -1360,6 +1937,7 @@ export default function EditorScreen({
         nodes: nodes,
         connections: connections,
         selectedNodeId: selectedNodeId,
+        highlightedNodeIds: highlightedNodeIds,
         onNodeSelect: setSelectedNodeId,
   onNodeMove: handleNodeMove,
   onNodeDrag: handleNodeDrag,
@@ -1530,6 +2108,14 @@ export default function EditorScreen({
       onNavigateToNode: handleSearchNavigate,
       onHighlightMatches: handleSearchHighlight,
       onReplaceAll: handleSearchReplace
+    }),
+
+    React.createElement(SettingsPanel, {
+      key: 'settings-panel',
+      isOpen: settingsVisible,
+      darkMode: darkMode,
+      onClose: () => setSettingsVisible(false),
+      onToggleDarkMode: (v) => setDarkMode(!!v)
     })
   ]);
 }
