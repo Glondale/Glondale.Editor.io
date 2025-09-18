@@ -24,7 +24,8 @@ export default function EditorSidebar({
   onOpenInventoryEditor = () => {},
   onOpenAchievementsEditor = () => {},
   onOpenFlagsEditor = () => {},
-  className = ''
+  className = '',
+  choiceScriptMode = false
 }) {
   const [activeTab, setActiveTab] = useState('scene'); // 'scene' or 'data'
   const [expandedSections, setExpandedSections] = useState({

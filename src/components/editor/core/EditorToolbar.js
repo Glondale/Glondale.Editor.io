@@ -38,10 +38,7 @@ export default function EditorToolbar({
   redoDescription = null,
   onUndo = () => {},
   onRedo = () => {},
-  commandHistory = null,
-  onOpenSettings = () => {},
-  isDarkMode = false,
-  onToggleDarkMode = () => {}
+  commandHistory = null
 }) {
   const [showValidationDetails, setShowValidationDetails] = useState(false);
   const [showProjectMenu, setShowProjectMenu] = useState(false);
@@ -594,14 +591,6 @@ export default function EditorToolbar({
       className: 'flex items-center space-x-3'
     }, [
       // Dark mode quick toggle
-      React.createElement(Button, {
-        key: 'theme-toggle',
-        onClick: () => onToggleDarkMode(!isDarkMode),
-        variant: 'secondary',
-        size: 'sm',
-        title: isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'
-      }, isDarkMode ? '🌞' : '🌙'),
-
       // Auto-save toggle
       React.createElement('div', {
         key: 'auto-save',
@@ -625,13 +614,6 @@ export default function EditorToolbar({
         key: 'session-menu',
         className: 'relative'
       }, [
-        React.createElement(Button, {
-          key: 'settings-btn',
-          onClick: onOpenSettings,
-          variant: 'secondary',
-          size: 'sm',
-          title: 'Editor Settings'
-        }, '⚙️ Settings'),
         React.createElement('button', {
           key: 'session-btn',
           onClick: () => setShowSessionMenu(!showSessionMenu),

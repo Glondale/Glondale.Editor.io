@@ -15,7 +15,8 @@ export default function SceneEditDialog({
   onSave = () => {},
   onCancel = () => {},
   onDelete = () => {},
-  onInlineAddFlag = null
+  onInlineAddFlag = null,
+  choiceScriptMode = false
 }) {
   const [formData, setFormData] = useState({
     title: '',

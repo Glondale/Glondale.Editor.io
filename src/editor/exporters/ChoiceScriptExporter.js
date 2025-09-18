@@ -19,80 +19,96 @@ export async function exportAdventureToChoiceScript(adventure = {}, options = {}
   };
 }
 
-function normalizeAdventure(adventure, options) {
+function normalizeAdventure(adventure = {}, options = {}) {
   const warnings = [];
   const scenes = Array.isArray(adventure.scenes) ? adventure.scenes : [];
+  const usedSceneIds = new Set();
   const sceneIdMap = new Map();
-  const usedIds = new Set();
-
-  scenes.forEach((scene, index) => {
-    const proposed = scene?.id || scene?.title || scene_;
-    const sanitized = makeUniqueIdentifier(proposed, usedIds, scene_);
-    sceneIdMap.set(scene?.id || sanitized, sanitized);
+  const sceneWrappers = scenes.map((scene, index) => {
+    const fallbackId = `scene_${index + 1}`;
+    const proposed = scene?.id ?? scene?.title ?? fallbackId;
+    const csId = makeUniqueIdentifier(proposed, usedSceneIds, fallbackId);
+    const originalKey = scene?.id ?? fallbackId;
+    sceneIdMap.set(originalKey, csId);
+    sceneIdMap.set(csId, csId);
+    return { scene, csId, originalKey };
   });
 
-  const sanitizedScenes = scenes.map((scene, index) => {
-    const originalId = scene?.id || scene_;
-    const csId = sceneIdMap.get(originalId) || makeUniqueIdentifier(originalId, usedIds, originalId);
+  const sanitizedScenes = sceneWrappers.map(({ scene, csId, originalKey }, index) => {
+    const originalId = scene?.id ?? originalKey;
     const contentText = convertContentToText(scene?.content);
     const contentLines = contentText ? contentText.split('\n') : [];
 
-    const normalizedChoices = Array.isArray(scene?.choices) ? scene.choices.map((choice, choiceIndex) => {
-      const choiceWarnings = [];
-      const text = convertChoiceText(choice?.text) || Option ;
-      const targetOriginal = choice?.targetSceneId;
-      const target = targetOriginal ? sceneIdMap.get(targetOriginal) || sanitizeIdentifier(targetOriginal) : null;
-      if (targetOriginal && !target) {
-        choiceWarnings.push(Choice "" targets missing scene ''. Using *finish.);
-      }
+    const normalizedChoices = Array.isArray(scene?.choices)
+      ? scene.choices.map((choice, choiceIndex) => {
+          const choiceWarnings = [];
+          const text = convertChoiceText(choice?.text) || `Option ${choiceIndex + 1}`;
+          const targetOriginal = choice?.targetSceneId;
+          let target = null;
 
-      const inputType = choice?.inputType || 'static';
-      const inputConfig = choice?.inputConfig || {};
-      let inputVariable = null;
-      let inputMin = null;
-      let inputMax = null;
-
-      if (inputType === 'input_text' || inputType === 'input_number') {
-        inputVariable = sanitizeIdentifier(inputConfig.variable || ${csId}_choice_);
-        if (!inputConfig.variable) {
-          choiceWarnings.push(Choice "" missing input variable; using ''.);
-        }
-        if (inputType === 'input_number') {
-          inputMin = Number.isFinite(inputConfig.min) ? Number(inputConfig.min) : 0;
-          inputMax = Number.isFinite(inputConfig.max) ? Number(inputConfig.max) : 100;
-          if (inputMin > inputMax) {
-            [inputMin, inputMax] = [inputMax, inputMin];
-            choiceWarnings.push(Choice "" had min greater than max; values swapped.);
+          if (targetOriginal) {
+            const mapped = sceneIdMap.get(targetOriginal) ?? sanitizeIdentifier(targetOriginal);
+            if (mapped) {
+              target = mapped;
+            }
+            if (!sceneIdMap.has(targetOriginal)) {
+              choiceWarnings.push(`Choice "${text}" targets missing scene "${targetOriginal}". Exporting as *finish.`);
+            }
           }
-        }
-      } else if (inputType === 'input_choice') {
-        choiceWarnings.push(Choice "" uses input_choice which is not supported by ChoiceScript; exporting as static choice.);
-      }
 
-      if (choice && choice.conditions && choice.conditions.length > 0) {
-        choiceWarnings.push(Choice "" has visibility conditions which are not exported; consider using selectable_if manually in ChoiceScript.);
-      }
-      if (choice && choice.requirements && choice.requirements.length > 0) {
-        choiceWarnings.push(Choice "" has requirements which are not exported.);
-      }
-      if (choice && choice.actions && choice.actions.length > 0) {
-        choiceWarnings.push(Choice "" has actions; convert them to ChoiceScript commands manually.);
-      }
+          const inputType = choice?.inputType || 'static';
+          const inputConfig = choice?.inputConfig || {};
+          let inputVariable = null;
+          let inputMin = null;
+          let inputMax = null;
 
-      warnings.push(...choiceWarnings);
+          if (inputType === 'input_text' || inputType === 'input_number') {
+            const fallbackVar = `${csId}_choice_${choiceIndex + 1}`;
+            inputVariable = sanitizeIdentifier(inputConfig.variable || fallbackVar) || fallbackVar;
+            if (!inputConfig.variable) {
+              choiceWarnings.push(`Choice "${text}" missing input variable; using "${inputVariable}".`);
+            }
+            if (inputType === 'input_number') {
+              inputMin = Number.isFinite(inputConfig.min) ? Number(inputConfig.min) : 0;
+              inputMax = Number.isFinite(inputConfig.max) ? Number(inputConfig.max) : 100;
+              if (inputMin > inputMax) {
+                [inputMin, inputMax] = [inputMax, inputMin];
+                choiceWarnings.push(`Choice "${text}" had min greater than max; values swapped.`);
+              }
+            }
+          } else if (inputType === 'input_choice') {
+            choiceWarnings.push(
+              `Choice "${text}" uses input_choice which is not supported by ChoiceScript; exporting as static choice.`
+            );
+          }
 
-      return {
-        id: choice?.id || choice_,
-        text,
-        target,
-        inputType,
-        inputVariable,
-        inputMin,
-        inputMax,
-        notes: choiceWarnings,
-        isFake: !!choice?.isFake
-      };
-    }) : [];
+          if (Array.isArray(choice?.conditions) && choice.conditions.length > 0) {
+            choiceWarnings.push(
+              `Choice "${text}" has visibility conditions which are not exported; consider using selectable_if manually.`
+            );
+          }
+          if (Array.isArray(choice?.requirements) && choice.requirements.length > 0) {
+            choiceWarnings.push(`Choice "${text}" has requirements which are not exported.`);
+          }
+          if (Array.isArray(choice?.actions) && choice.actions.length > 0) {
+            choiceWarnings.push(`Choice "${text}" has actions; convert them to ChoiceScript commands manually.`);
+          }
+
+          warnings.push(...choiceWarnings);
+
+          return {
+            id: choice?.id || `choice_${choiceIndex + 1}`,
+            text,
+            target,
+            inputType,
+            inputVariable,
+            inputMin,
+            inputMax,
+            notes: choiceWarnings,
+            isFake: Boolean(choice?.isFake)
+          };
+        })
+      : [];
 
     return {
       originalId,
@@ -102,8 +118,11 @@ function normalizeAdventure(adventure, options) {
     };
   });
 
-  const startSceneId = adventure?.startSceneId ? (sceneIdMap.get(adventure.startSceneId) || sanitizeIdentifier(adventure.startSceneId)) : sanitizedScenes[0]?.csId || null;
-  if (!adventure?.startSceneId) {
+  const firstSceneId = sceneWrappers[0]?.csId || null;
+  const startSceneId = adventure?.startSceneId
+    ? sceneIdMap.get(adventure.startSceneId) || sanitizeIdentifier(adventure.startSceneId)
+    : firstSceneId;
+  if (!adventure?.startSceneId && firstSceneId) {
     warnings.push('Adventure missing startSceneId; defaulting to first scene.');
   }
 
@@ -113,10 +132,11 @@ function normalizeAdventure(adventure, options) {
   const statIdSet = new Set();
 
   stats.forEach((stat, index) => {
-    const rawId = stat?.id || stat_;
-    const id = makeUniqueIdentifier(rawId, statIdSet, stat_);
+    const fallbackId = `stat_${index + 1}`;
+    const rawId = stat?.id ?? fallbackId;
+    const id = makeUniqueIdentifier(rawId, statIdSet, fallbackId);
     const defaultValue = formatDefaultStatValue(stat);
-    statDeclarations.push(*create  );
+    statDeclarations.push(`*create ${id} ${defaultValue}`);
     statChart.push({ id, type: determineStatType(stat) });
   });
 
@@ -132,9 +152,9 @@ function normalizeAdventure(adventure, options) {
   });
 
   extraVariables.forEach((type, variableId) => {
-    if (!statDeclarations.some(line => line.includes(  ))) {
+    if (!statDeclarations.some(line => line.startsWith(`*create ${variableId} `))) {
       const defaultValue = type === 'number' ? 0 : '""';
-      statDeclarations.push(*create  );
+      statDeclarations.push(`*create ${variableId} ${defaultValue}`);
       statChart.push({ id: variableId, type: type === 'number' ? 'number' : 'string' });
     }
   });
@@ -146,7 +166,7 @@ function normalizeAdventure(adventure, options) {
   };
 
   sanitizedScenes.forEach(scene => {
-    files[${scene.csId}.txt] = buildSceneFile(scene);
+    files[`${scene.csId}.txt`] = buildSceneFile(scene);
   });
 
   return {
@@ -159,10 +179,10 @@ function buildStartupFile(adventure, scenes, statDeclarations, startSceneId) {
   const lines = [];
   const title = (adventure?.title || 'Untitled Adventure').trim();
   if (title) {
-    lines.push(*title );
+    lines.push(`*title ${title}`);
   }
   if (adventure?.author) {
-    lines.push(*author );
+    lines.push(`*author ${adventure.author}`);
   }
   lines.push('*comment Exported from Glondale Editor in ChoiceScript mode');
   lines.push('');
@@ -174,12 +194,12 @@ function buildStartupFile(adventure, scenes, statDeclarations, startSceneId) {
 
   lines.push('*scene_list');
   scenes.forEach(scene => {
-    lines.push(  );
+    lines.push(`  ${scene.csId}`);
   });
   lines.push('');
 
   if (startSceneId) {
-    lines.push(*goto );
+    lines.push(`*goto ${startSceneId}`);
   } else {
     lines.push('*finish');
   }
@@ -199,9 +219,9 @@ function buildStatsFile(statChart) {
   lines.push('*stat_chart');
   statChart.forEach(stat => {
     if (stat.type === 'number') {
-      lines.push(  percent );
+      lines.push(`  percent ${stat.id}`);
     } else {
-      lines.push(  text );
+      lines.push(`  text ${stat.id}`);
     }
   });
   lines.push('');
@@ -215,7 +235,7 @@ function buildSceneIndex(scenes) {
 
 function buildSceneFile(scene) {
   const lines = [];
-  lines.push(*label );
+  lines.push(`*label ${scene.csId}`);
   lines.push('');
 
   if (scene.contentLines.length > 0) {
@@ -231,22 +251,22 @@ function buildSceneFile(scene) {
 
   lines.push('*choice');
   scene.choices.forEach(choice => {
-    lines.push(  #);
+    lines.push(`  #${choice.text}`);
     if (choice.notes.length > 0) {
-      choice.notes.forEach(note => lines.push(    *comment ));
+      choice.notes.forEach(note => lines.push(`    *comment ${note}`));
     }
     if (choice.inputType === 'input_text' && choice.inputVariable) {
-      lines.push(    *input_text );
+      lines.push(`    *input_text ${choice.inputVariable}`);
     } else if (choice.inputType === 'input_number' && choice.inputVariable != null) {
       const min = choice.inputMin != null ? choice.inputMin : 0;
       const max = choice.inputMax != null ? choice.inputMax : 100;
-      lines.push(    *input_number   );
+      lines.push(`    *input_number ${choice.inputVariable} ${min} ${max}`);
     }
     const target = choice.target;
     if (target) {
-      lines.push(    *goto );
+      lines.push(`    *goto ${target}`);
     } else if (choice.isFake) {
-      lines.push(    *goto );
+      lines.push(`    *goto ${scene.csId}`);
     } else {
       lines.push('    *finish');
     }
@@ -256,23 +276,30 @@ function buildSceneFile(scene) {
 }
 
 function makeUniqueIdentifier(value, usedSet, fallback) {
-  let id = sanitizeIdentifier(value) || sanitizeIdentifier(fallback);
-  let counter = 1;
-  while (usedSet.has(id)) {
+  const baseRaw = sanitizeIdentifier(value) || sanitizeIdentifier(fallback) || 'entry';
+  let base = baseRaw;
+  if (!base) {
+    base = 'entry';
+  }
+  let id = base;
+  let counter = 2;
+  while (usedSet.has(id) || !id) {
+    id = `${base}_${counter}`;
     counter += 1;
-    id = ${sanitizeIdentifier(value || fallback)}_;
   }
   usedSet.add(id);
   return id;
 }
 
 function sanitizeIdentifier(value) {
-  if (!value && value !== 0) return '';
+  if (value === undefined || value === null) return '';
   let str = String(value).trim().toLowerCase();
   str = str.replace(/[^a-z0-9_]/g, '_');
+  str = str.replace(/_+/g, '_');
+  str = str.replace(/^_+/, '');
   if (!str) return '';
   if (!/^[a-z]/.test(str)) {
-    str = _;
+    str = `s_${str}`;
   }
   return str;
 }
@@ -289,7 +316,12 @@ function convertContentToText(content) {
   sanitized = sanitized.replace(/<br\s*\/?\s*>/gi, '\n');
   sanitized = sanitized.replace(/<\/p>/gi, '\n\n');
   sanitized = sanitized.replace(/<[^>]+>/g, '');
-  return decodeEntities(sanitized).split('\n').map(line => line.replace(/\s+$/g, '')).join('\n').trim();
+  const decoded = decodeEntities(sanitized);
+  return decoded
+    .split('\n')
+    .map(line => line.replace(/\s+$/g, ''))
+    .join('\n')
+    .trim();
 }
 
 function decodeEntities(value) {
@@ -308,6 +340,12 @@ function decodeEntities(value) {
     .replace(/&nbsp;/g, ' ');
 }
 
+function escapeChoiceScriptString(value) {
+  return String(value)
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"');
+}
+
 function formatDefaultStatValue(stat) {
   if (!stat) return 0;
   const type = determineStatType(stat);
@@ -320,7 +358,7 @@ function formatDefaultStatValue(stat) {
   }
   if (type === 'string') {
     const str = value != null ? String(value) : '';
-    return \"\";
+    return `"${escapeChoiceScriptString(str)}"`;
   }
   return value != null ? value : 0;
 }
@@ -335,4 +373,3 @@ function determineStatType(stat) {
   }
   return 'string';
 }
-

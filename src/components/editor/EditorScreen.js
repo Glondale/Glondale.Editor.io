@@ -12,7 +12,6 @@ import EditorSessionStorage from '../../engine/EditorSessionStorage.js';
 import AdvancedChoiceDialog from './AdvancedChoiceDialog.js';
 import ActionHistoryDialog from './dialogs/ActionHistoryDialog.js';
 import SearchPanel from './panels/SearchPanel.js';
-import SettingsPanel from './panels/SettingsPanel.js';
 import FlagEditor from './dialogs/FlagEditor.js';
 import { commandHistory, CompositeCommand } from '../../services/CommandHistory.js';
 import {
@@ -58,8 +57,6 @@ export default function EditorScreen({
   // Search panel state
   const [searchPanelVisible, setSearchPanelVisible] = useState(false);
   const [searchHighlights, setSearchHighlights] = useState([]);
-  const [settingsVisible, setSettingsVisible] = useState(false);
-  const [darkMode, setDarkMode] = useState(false);
 
   // Enhanced adventure state with Phase 3 features
   const [adventure, setAdventure] = useState({
@@ -1854,7 +1851,7 @@ export default function EditorScreen({
   const selectedNode = selectedNodeId ? nodes.get(selectedNodeId) : null;
 
   return React.createElement('div', {
-    className: `editor-screen h-screen flex flex-col ${darkMode ? 'bg-gray-900 text-gray-100' : 'bg-gray-100 text-gray-900'} ${className}`
+    className: `editor-screen h-screen flex flex-col bg-gray-100 text-gray-900 ${className}`
   }, [
     React.createElement(EditorToolbar, {
       key: 'toolbar',
@@ -1872,9 +1869,6 @@ export default function EditorScreen({
       exportFormats: exportFormatOptions,
       sessionStorage: editorSession,
       onProjectListRefresh: loadProjectList,
-      onOpenSettings: () => setSettingsVisible(true),
-      isDarkMode: darkMode,
-      onToggleDarkMode: (v) => setDarkMode(!!v),
       onNewAdventure: async (projectName) => {
         if (!hasUnsavedChanges || confirm('Create new adventure? Unsaved changes will be lost.')) {
           if (projectName) {
@@ -2108,14 +2102,6 @@ export default function EditorScreen({
       onNavigateToNode: handleSearchNavigate,
       onHighlightMatches: handleSearchHighlight,
       onReplaceAll: handleSearchReplace
-    }),
-
-    React.createElement(SettingsPanel, {
-      key: 'settings-panel',
-      isOpen: settingsVisible,
-      darkMode: darkMode,
-      onClose: () => setSettingsVisible(false),
-      onToggleDarkMode: (v) => setDarkMode(!!v)
     })
   ]);
 }

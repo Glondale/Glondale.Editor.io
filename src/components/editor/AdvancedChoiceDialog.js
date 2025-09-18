@@ -46,7 +46,8 @@ export function AdvancedChoiceDialog({
   availableScenes = [],
   existingChoices = [],
   onInlineAddFlag = null,
-  availableAchievements = []
+  availableAchievements = [],
+  isChoiceScriptMode = false
 }) {
   const [choiceData, setChoiceData] = useState({ ...DEFAULT_CHOICE, id: generateChoiceId(), inputConfig: {} });
   const [activeTab, setActiveTab] = useState('basic');
